@@ -1,0 +1,15 @@
+services:
+  analyzer:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:3400:3400"
+    environment:
+      ANALYZER_USER: ${ANALYZER_USER:-admin}
+      ANALYZER_PASSWORD: ${ANALYZER_PASSWORD:?Set ANALYZER_PASSWORD in .env}
+    volumes:
+      - market-data:/app/data
+    stop_grace_period: 20s
+volumes:
+  market-data:
