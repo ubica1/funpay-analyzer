@@ -103,6 +103,8 @@ export async function fetchCategory(url) {
     headers: {
       "User-Agent": "FunPayMarketAnalyzer/0.1 (public listing statistics)",
       "Accept-Language": "ru-RU,ru;q=0.9",
+      // FunPay picks the currency by location; ask for roubles explicitly.
+      Cookie: "cy=rub",
     },
   });
   if (!response.ok)

@@ -135,7 +135,9 @@ function App() {
   const [error, setError] = useState("");
   const [tab, setTab] = useState("overview");
   const [advanced, setAdvanced] = useState(false);
-  const [metric, setMetric] = useState<"median" | "count">("median");
+  const [metric, setMetric] = useState<"median" | "minimum" | "count">(
+    "median",
+  );
   const [toast, setToast] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [ready, setReady] = useState(false);
@@ -914,7 +916,7 @@ function App() {
                                     <h2>
                                       Динамика рынка{" "}
                                       <span className="subtle-badge">
-                                        {metric === "median" ? "₽" : "лоты"}
+                                        {metric === "count" ? "лоты" : "₽"}
                                       </span>
                                     </h2>
                                     <p>
@@ -929,7 +931,15 @@ function App() {
                                       }
                                       onClick={() => setMetric("median")}
                                     >
-                                      Цена
+                                      Медиана
+                                    </button>
+                                    <button
+                                      className={
+                                        metric === "minimum" ? "selected" : ""
+                                      }
+                                      onClick={() => setMetric("minimum")}
+                                    >
+                                      Минимум
                                     </button>
                                     <button
                                       className={
@@ -1013,9 +1023,9 @@ function App() {
                                           String(label)
                                         }
                                         formatter={(v, name) => [
-                                          metric === "median"
-                                            ? money(Number(v))
-                                            : number(Number(v)),
+                                          metric === "count"
+                                            ? number(Number(v))
+                                            : money(Number(v)),
                                           cats.find((c) => c.id === name)
                                             ?.name ?? name,
                                         ]}
@@ -1054,7 +1064,9 @@ function App() {
                                   <Info size={13} />
                                   {metric === "median"
                                     ? "Медиана меньше зависит от аномально дорогих предложений."
-                                    : "Количество доступных объявлений в сохранённой выборке."}
+                                    : metric === "minimum"
+                                      ? "Самая низкая цена среди предложений, подходящих под фильтры."
+                                      : "Количество доступных объявлений в сохранённой выборке."}
                                 </div>
                               </section>
                               <section className="panel distribution">
