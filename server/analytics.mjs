@@ -1,3 +1,12 @@
+import {
+  accountRanges,
+  saleTypes,
+  accountTypes,
+  accountFilterDefaults,
+  offerSort,
+  attributeNumber,
+  attributeText,
+} from "./account-fields.mjs";
 import { z } from "zod";
 const date = z
   .string()
@@ -8,6 +17,10 @@ const date = z
       new Date(v).toISOString().slice(0, 10) === v,
     "Неверная дата",
   );
+const optionalNumber = z.preprocess(
+  (v) => (v === "" || v == null ? undefined : v),
+  z.coerce.number().min(0).max(1e9).optional(),
+);
 export const querySchema = z
   .object({
     source: z.enum(["live", "demo"]).default("live"),
@@ -21,11 +34,47 @@ export const querySchema = z
     online: z.enum(["all", "1"]).default("all"),
     attribute: z.string().max(100).default(""),
     value: z.string().max(200).default(""),
+    saleType: z.enum(["all", "sale", "rent"]).default("all"),
+    accountType: z
+      .enum(["all", "ranked", "calibration", "unranked"])
+      .default("all"),
+    auto: z.enum(["all", "1"]).default("all"),
+    mmrMin: optionalNumber,
+    mmrMax: optionalNumber,
+    decencyMin: optionalNumber,
+    decencyMax: optionalNumber,
+    politenessMin: optionalNumber,
+    politenessMax: optionalNumber,
+    gamesMin: optionalNumber,
+    gamesMax: optionalNumber,
+    hoursMin: optionalNumber,
+    hoursMax: optionalNumber,
     sort: z
-      .enum(["price_asc", "price_desc", "reviews_desc", "title"])
+      .enum([
+        "price_asc",
+        "price_desc",
+        "reviews_desc",
+        "title",
+        "mmr_asc",
+        "mmr_desc",
+        "decency_desc",
+        "politeness_desc",
+        "games_desc",
+        "hours_desc",
+      ])
       .default("price_asc"),
     page: z.coerce.number().int().min(1).max(100000).default(1),
   })
+  .refine(
+    (v) =>
+      accountRanges.every(
+        ([name]) =>
+          v[`${name}Min`] == null ||
+          v[`${name}Max`] == null ||
+          v[`${name}Min`] <= v[`${name}Max`],
+      ),
+    "Нижняя граница параметра не должна превышать верхнюю",
+  )
   .refine(
     (v) => v.from <= v.to && v.min <= v.max,
     "Проверьте границы периода и цены",
@@ -82,6 +131,25 @@ function where(q, ids) {
     );
     args.push(q.attribute, q.value);
   }
+  if (q.saleType && q.saleType !== "all") {
+    clauses.push("attribute_text(attributes, 'type1') = ?");
+    args.push(saleTypes[q.saleType]);
+  }
+  if (q.accountType && q.accountType !== "all") {
+    clauses.push("attribute_text(attributes, 'type') = ?");
+    args.push(accountTypes[q.accountType]);
+  }
+  if (q.auto === "1") clauses.push("json_extract(attributes, '$.auto') = '1'");
+  for (const [name, field] of accountRanges) {
+    if (q[`${name}Min`] != null) {
+      clauses.push("attribute_number(attributes, ?) >= ?");
+      args.push(field, q[`${name}Min`]);
+    }
+    if (q[`${name}Max`] != null) {
+      clauses.push("attribute_number(attributes, ?) <= ?");
+      args.push(field, q[`${name}Max`]);
+    }
+  }
   return { sql: clauses.join(" AND "), args };
 }
 const statsSql =
@@ -134,12 +202,7 @@ export function analyze(db, q) {
         : 0
     ].count++;
   }
-  const sort = {
-    price_asc: "price ASC,offer_id",
-    price_desc: "price DESC,offer_id",
-    reviews_desc: "reviews DESC,price",
-    title: "title,offer_id",
-  }[q.sort];
+  const sort = offerSort(q.sort);
   const page = Math.min(q.page, Math.max(1, Math.ceil(stats.count / 12)));
   const offers = db
     .prepare(
@@ -160,6 +223,7 @@ export function analyze(db, q) {
   const facetWhere = where(
     {
       ...q,
+      ...accountFilterDefaults,
       q: "",
       min: 0,
       max: 1e12,
@@ -172,7 +236,7 @@ export function analyze(db, q) {
   );
   const facets = db
     .prepare(
-      `SELECT DISTINCT j.key,j.value FROM observations,json_each(attributes) j WHERE ${facetWhere.sql} ORDER BY j.key,j.value LIMIT 300`,
+      `WITH values_list AS (SELECT DISTINCT j.key,j.value FROM observations,json_each(attributes) j WHERE ${facetWhere.sql}), ranked AS (SELECT key,value,ROW_NUMBER() OVER (PARTITION BY key ORDER BY value) position FROM values_list) SELECT key,value FROM ranked WHERE position<=60 ORDER BY key,value`,
     )
     .all(...facetWhere.args);
   const coverage = selected.latest.map((s) => ({
@@ -213,9 +277,20 @@ export function exportRows(db, q) {
   );
   return db
     .prepare(
-      `SELECT s.collected_at,c.name category,o.offer_id,o.title,o.price,o.seller,o.reviews,o.online,o.attributes,o.url FROM observations o JOIN snapshots s ON s.id=o.snapshot_id JOIN categories c ON c.id=s.category_id WHERE ${w.sql} ORDER BY price`,
+      `SELECT s.collected_at,c.name category,o.offer_id,o.title,o.price,o.seller,o.reviews,o.online,o.attributes,o.url FROM observations o JOIN snapshots s ON s.id=o.snapshot_id JOIN categories c ON c.id=s.category_id WHERE ${w.sql} ORDER BY ${offerSort(q.sort)}`,
     )
-    .all(...w.args);
+    .all(...w.args)
+    .map((row) => ({
+      ...row,
+      mmr: attributeNumber(row.attributes, "solommr"),
+      sale_type: attributeText(row.attributes, "type1"),
+      account_type: attributeText(row.attributes, "type"),
+      decency: attributeNumber(row.attributes, "decency"),
+      politeness: attributeNumber(row.attributes, "politeness"),
+      games: attributeNumber(row.attributes, "games"),
+      hours: attributeNumber(row.attributes, "time"),
+      auto: attributeText(row.attributes, "auto"),
+    }));
 }
 export function csv(rows) {
   const keys = [
@@ -227,6 +302,14 @@ export function csv(rows) {
     "seller",
     "reviews",
     "online",
+    "mmr",
+    "sale_type",
+    "account_type",
+    "decency",
+    "politeness",
+    "games",
+    "hours",
+    "auto",
     "attributes",
     "url",
   ];

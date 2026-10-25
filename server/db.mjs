@@ -1,3 +1,4 @@
+import { attributeNumber, attributeText } from "./account-fields.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -56,6 +57,8 @@ export function createDatabase(path = ":memory:") {
         );
       },
     });
+  db.function("attribute_number", { deterministic: true }, attributeNumber);
+  db.function("attribute_text", { deterministic: true }, attributeText);
   return db;
 }
 export function settings(db) {
@@ -162,7 +165,7 @@ export function seedDemo(db) {
           id: `demo-${ci}-${i}`,
           title:
             ci === 0
-              ? `Аккаунт Dota 2 · ${rank} MMR · ${i % 3 === 0 ? "100 часов" : "Рейтинг открыт"} · ${i % 2 ? "EU" : "RU"}`
+              ? `Аккаунт Dota 2 · ${i % 11 ? `${1000 + (i % 20) * 500} MMR` : "MMR не указан"} · ${i % 5 === 0 ? "Аренда" : "Продажа"} · ${i % 2 ? "EU" : "RU"}`
               : `${name} · ${rank} MMR · ${i % 2 ? "EU" : "RU"}`,
           price: Math.round(
             bases[ci] * (0.35 + (i % 19) / 9) * (1 + (29 - day) * 0.004) +
@@ -172,7 +175,28 @@ export function seedDemo(db) {
           seller,
           reviews: 40 + (i % sellers.length) * 127,
           online: rand() > 0.38,
-          attributes: { mmr: rank, region: i % 2 ? "EU" : "RU" },
+          attributes:
+            ci === 0
+              ? {
+                  ...(i % 11 ? { solommr: String(1000 + (i % 20) * 500) } : {}),
+                  type1: i % 5 === 0 ? "аренда" : "продажа",
+                  ...(i % 5
+                    ? {
+                        type: [
+                          "с рейтингом",
+                          "под калибровку (tbd)",
+                          "без доступа к рейтинговым играм",
+                        ][i % 3],
+                      }
+                    : {}),
+                  decency: String(6000 + (i % 7) * 1000),
+                  politeness: String(7000 + (i % 6) * 1000),
+                  games: String(100 + i * 17),
+                  time: String(100 + i * 13),
+                  auto: i % 4 ? "1" : "0",
+                  region: i % 2 ? "EU" : "RU",
+                }
+              : { mmr: rank, region: i % 2 ? "EU" : "RU" },
           url: "https://funpay.com/",
         });
       }

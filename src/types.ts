@@ -1,3 +1,4 @@
+import type { AccountFilters } from "./account-fields";
 export type Category = {
   id: string;
   name: string;
@@ -25,7 +26,7 @@ export type Bootstrap = {
   }[];
   hasData: boolean;
 };
-export type Filters = {
+export type Filters = AccountFilters & {
   source: "live" | "demo";
   category: string;
   from: string;

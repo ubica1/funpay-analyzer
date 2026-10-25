@@ -176,7 +176,7 @@ test("parser handles actual FunPay fields and incomplete coverage", () => {
       seller: "TestSeller",
       sellerId: "456",
       reviews: 1234,
-      attributes: { mmr: "4000" },
+      attributes: { auto: "0", mmr: "4000" },
     }),
   );
 });

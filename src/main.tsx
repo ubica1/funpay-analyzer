@@ -1,3 +1,11 @@
+import { AccountFilters } from "./AccountFilters";
+import {
+  accountFilterDefaults,
+  attributeLabel,
+  attributeDisplay,
+  numericMmr,
+  offerTags,
+} from "./account-fields";
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -73,6 +81,7 @@ const dateKey = (d: Date) =>
   new Date(d.getTime() + 10800000).toISOString().slice(0, 10);
 const today = dateKey(new Date());
 const initial: Filters = {
+  ...accountFilterDefaults,
   source: "live",
   category: "accounts",
   from: dateKey(new Date(Date.now() - 29 * 86400000)),
@@ -373,7 +382,7 @@ function App() {
           <div className="saved-row" key={i}>
             <button
               onClick={() => {
-                setFilters({ ...p.filters, page: 1 });
+                setFilters({ ...initial, ...p.filters, page: 1 });
                 setTab("overview");
               }}
             >
@@ -562,6 +571,8 @@ function App() {
                       value={filters.category}
                       onChange={(e) =>
                         update({
+                          ...accountFilterDefaults,
+                          sort: "price_asc",
                           category: e.target.value,
                           attribute: "",
                           value: "",
@@ -644,6 +655,13 @@ function App() {
                     <Bookmark size={18} />
                   </button>
                 </div>
+                {filters.category === "accounts" && (
+                  <AccountFilters
+                    filters={filters}
+                    onChange={update}
+                    expanded={advanced}
+                  />
+                )}
                 {advanced && (
                   <div className="advanced-filters">
                     <label>
@@ -688,17 +706,31 @@ function App() {
                         }
                       >
                         <option value="">Все параметры</option>
-                        {[...new Set(data?.facets.map((f) => f.key))].map(
-                          (k) => (
+                        {[...new Set(data?.facets.map((f) => f.key))]
+                          .filter(
+                            (k) =>
+                              filters.category !== "accounts" ||
+                              ![
+                                "type1",
+                                "type",
+                                "solommr",
+                                "decency",
+                                "politeness",
+                                "games",
+                                "time",
+                                "auto",
+                              ].includes(k) ||
+                              filters.attribute === k,
+                          )
+                          .map((k) => (
                             <option key={k} value={k}>
                               {k === "mmr"
                                 ? "Рейтинг MMR"
                                 : k === "region"
                                   ? "Регион"
-                                  : k}
+                                  : attributeLabel(k)}
                             </option>
-                          ),
-                        )}
+                          ))}
                       </select>
                     </label>
                     {filters.attribute && (
@@ -731,6 +763,7 @@ function App() {
                       className="text-button"
                       onClick={() =>
                         update({
+                          ...accountFilterDefaults,
                           min: "",
                           max: "",
                           reviews: "",
@@ -852,6 +885,7 @@ function App() {
                             data.snapshots
                               ? update({
                                   q: "",
+                                  ...accountFilterDefaults,
                                   min: "",
                                   max: "",
                                   reviews: "",
@@ -1285,6 +1319,28 @@ function App() {
                                   Больше отзывов
                                 </option>
                                 <option value="title">По названию</option>
+                                {filters.category === "accounts" && (
+                                  <>
+                                    <option value="mmr_asc">
+                                      MMR: по возрастанию
+                                    </option>
+                                    <option value="mmr_desc">
+                                      MMR: по убыванию
+                                    </option>
+                                    <option value="decency_desc">
+                                      Выше порядочность
+                                    </option>
+                                    <option value="politeness_desc">
+                                      Выше вежливость
+                                    </option>
+                                    <option value="games_desc">
+                                      Больше матчей
+                                    </option>
+                                    <option value="hours_desc">
+                                      Больше часов
+                                    </option>
+                                  </>
+                                )}
                               </select>
                             </div>
                             <div className="table-scroll">
@@ -1293,6 +1349,30 @@ function App() {
                                   <tr>
                                     <th className="star-cell" />
                                     <th>Предложение</th>
+                                    {filters.category === "accounts" && (
+                                      <th>
+                                        <button
+                                          className="column-sort"
+                                          onClick={() =>
+                                            update({
+                                              sort:
+                                                filters.sort === "mmr_desc"
+                                                  ? "mmr_asc"
+                                                  : "mmr_desc",
+                                            })
+                                          }
+                                        >
+                                          MMR{" "}
+                                          {filters.sort === "mmr_asc" ? (
+                                            <ArrowUp size={12} />
+                                          ) : filters.sort === "mmr_desc" ? (
+                                            <ArrowDown size={12} />
+                                          ) : (
+                                            <SlidersHorizontal size={11} />
+                                          )}
+                                        </button>
+                                      </th>
+                                    )}
                                     <th>Продавец</th>
                                     <th>
                                       Цена <ArrowDown size={11} />
@@ -1339,13 +1419,18 @@ function App() {
                                           >
                                             {o.category}
                                           </span>
-                                          {Object.entries(o.attributes)
-                                            .slice(0, 2)
-                                            .map(([k, v]) => (
-                                              <span key={k}>{v}</span>
-                                            ))}
+                                          {offerTags(o.attributes).map(
+                                            ({ key, text }) => (
+                                              <span key={key}>{text}</span>
+                                            ),
+                                          )}
                                         </div>
                                       </td>
+                                      {filters.category === "accounts" && (
+                                        <td className="mmr-cell">
+                                          {number(numericMmr(o.attributes))}
+                                        </td>
+                                      )}
                                       <td>
                                         <div className="seller-cell">
                                           <span
@@ -1583,8 +1668,8 @@ function App() {
             <div className="drawer-attrs">
               {Object.entries(offer.attributes).map(([k, v]) => (
                 <div key={k}>
-                  <span>{k}</span>
-                  <strong>{v}</strong>
+                  <span>{attributeLabel(k)}</span>
+                  <strong>{attributeDisplay(k, v)}</strong>
                 </div>
               ))}
             </div>

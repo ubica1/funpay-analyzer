@@ -66,7 +66,7 @@ export function parseOffers(html, pageUrl) {
       skipped++;
       return;
     }
-    const attributes = {};
+    const attributes = { auto: el.attr("data-auto") === "1" ? "1" : "0" };
     for (const [key, value] of Object.entries(node.attribs ?? {}))
       if (key.startsWith("data-f-")) attributes[key.slice(7)] = value;
     offers.push({
