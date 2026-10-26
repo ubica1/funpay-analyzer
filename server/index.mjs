@@ -5,7 +5,13 @@ import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createDatabase, seedDemo, settings } from "./db.mjs";
 import { categoryUrl, createCollector } from "./collector.mjs";
-import { analyze, querySchema, exportRows, csv } from "./analytics.mjs";
+import {
+  analyze,
+  querySchema,
+  exportRows,
+  csv,
+  sellerDetail,
+} from "./analytics.mjs";
 
 export function createApp({
   db = createDatabase(process.env.DATABASE_PATH ?? "data/market.sqlite"),
@@ -94,6 +100,11 @@ export function createApp({
       .set("Content-Type", "text/csv; charset=utf-8")
       .attachment(`funpay-${q.source}-${q.from}-${q.to}.csv`)
       .send(csv(exportRows(source(q), q)));
+  });
+  app.get("/api/sellers/:id", (req, res) => {
+    const q = querySchema.parse(req.query);
+    const id = z.string().max(100).parse(req.params.id);
+    res.json(sellerDetail(source(q), q, id));
   });
   app.get("/api/offers/:id/history", (req, res) => {
     const q = querySchema.parse(req.query);

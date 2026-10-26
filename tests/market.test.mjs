@@ -1,8 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDatabase, saveSnapshot, settings } from "../server/db.mjs";
-import { parseOffers, categoryUrl } from "../server/collector.mjs";
-import { analyze, querySchema, csv, exportRows } from "../server/analytics.mjs";
+import { parseOffers, categoryUrl, verifySales } from "../server/collector.mjs";
+import {
+  analyze,
+  querySchema,
+  csv,
+  exportRows,
+  sales,
+  sellerDetail,
+} from "../server/analytics.mjs";
 import { createApp } from "../server/index.mjs";
 const offer = (id, price, extra = {}) => ({
   id,
@@ -364,5 +371,137 @@ test("HTTP Basic access is required when configured", async () => {
   } finally {
     await new Promise((r) => server.close(r));
     app.close();
+  }
+});
+test("sales: vanished lots count once their page is gone, swapped accounts count at once", async () => {
+  const db = createDatabase();
+  try {
+    const at = (h) => new Date(Date.now() - h * 3600000).toISOString();
+    const acc = (id, price, sellerId, mmr, extra = {}) =>
+      offer(id, price, {
+        sellerId,
+        seller: `S${sellerId}`,
+        attributes: { solommr: String(mmr), type1: "продажа" },
+        ...extra,
+      });
+    const rental = { attributes: { solommr: "2000", type1: "аренда" } };
+    const repost = { title: "Тот же лот" };
+    saveSnapshot(
+      db,
+      "accounts",
+      [
+        acc("1", 100, "1", 3000),
+        acc("2", 200, "1", 4000),
+        acc("3", 300, "2", 5000),
+        acc("5", 50, "1", 2000, rental),
+        acc("6", 70, "1", 2500, repost),
+        acc("8", 80, "1", 3300),
+      ],
+      {},
+      at(30),
+    );
+    saveSnapshot(
+      db,
+      "accounts",
+      [
+        acc("2", 200, "1", 4500),
+        acc("4", 400, "1", 6000),
+        acc("7", 70, "1", 2500, repost),
+        acc("8", 80, "1", 3350),
+      ],
+      {},
+      at(2),
+    );
+    assert.deepEqual(
+      sales(db, q({ category: "accounts" })).list.map((r) => r.offer_id),
+      ["2"],
+    );
+    const checked = [];
+    const result0 = await verifySales(db, {
+      pause: 0,
+      check: async (id) => {
+        checked.push(id);
+        return id === "1" ? "removed" : "alive";
+      },
+    });
+    assert.deepEqual(checked.sort(), ["1", "3"]);
+    assert.deepEqual(result0, { checked: 2, removed: 1, alive: 1, left: 0 });
+    const result = sales(db, q({ category: "accounts" }));
+    assert.equal(result.pending, 0);
+    assert.deepEqual(
+      result.list.map((r) => [r.offer_id, r.kind, r.price]).sort(),
+      [
+        ["1", "gone", 100],
+        ["2", "replaced", 200],
+      ],
+    );
+    assert.equal(result.summary.day.count, 2);
+    assert.equal(result.summary.day.median, 150);
+    assert.equal(result.summary.month.total, 300);
+    assert.equal(
+      sales(db, q({ category: "accounts", mmrMin: 3500 })).list.length,
+      1,
+    );
+  } finally {
+    db.close();
+  }
+});
+test("seller detail: price series per snapshot, current lots and verified sales", async () => {
+  const db = createDatabase();
+  try {
+    const at = (h) => new Date(Date.now() - h * 3600000).toISOString();
+    const day = at(0).slice(0, 10);
+    const lot = (id, price, sellerId) =>
+      offer(id, price, {
+        sellerId,
+        seller: `S${sellerId}`,
+        attributes: { solommr: "5000", type1: "продажа" },
+      });
+    saveSnapshot(
+      db,
+      "accounts",
+      [lot("1", 100, "1"), lot("2", 300, "1"), lot("3", 50, "2")],
+      {},
+      at(3),
+    );
+    saveSnapshot(
+      db,
+      "accounts",
+      [lot("2", 250, "1"), lot("3", 50, "2")],
+      {},
+      at(1),
+    );
+    await verifySales(db, { pause: 0, check: async () => "removed" });
+    const query = querySchema.parse({
+      from: day,
+      to: day,
+      category: "accounts",
+    });
+    const detail = sellerDetail(db, query, "1");
+    assert.equal(detail.seller, "S1");
+    assert.deepEqual(
+      detail.series.map((p) => [p.count, p.minimum]),
+      [
+        [2, 100],
+        [1, 250],
+      ],
+    );
+    assert.deepEqual(
+      detail.lots.map((l) => l.offer_id),
+      ["2"],
+    );
+    assert.deepEqual(
+      detail.sales.map((s) => [s.offer_id, s.price]),
+      [["1", 100]],
+    );
+    assert.deepEqual(
+      analyze(db, query).sellers.map((s) => [s.seller_id, s.minimum, s.sold]),
+      [
+        ["2", 50, 0],
+        ["1", 250, 1],
+      ],
+    );
+  } finally {
+    db.close();
   }
 });

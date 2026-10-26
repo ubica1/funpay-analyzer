@@ -113,12 +113,14 @@ function selection(db, q, from = q.from, to = q.to) {
 }
 function where(q, ids) {
   const clauses = [
-    `snapshot_id IN (${ids.length ? ids.map(() => "?").join(",") : "NULL"})`,
+    ids === null
+      ? "1"
+      : `snapshot_id IN (${ids.length ? ids.map(() => "?").join(",") : "NULL"})`,
     "price>=?",
     "price<=?",
     "reviews>=?",
   ];
-  const args = [...ids, q.min, q.max, q.reviews];
+  const args = [...(ids ?? []), q.min, q.max, q.reviews];
   if (q.q) {
     clauses.push("(title LIKE ? ESCAPE '\\' OR seller LIKE ? ESCAPE '\\')");
     const like = `%${q.q.replace(/[\\%_]/g, "\\$&")}%`;
@@ -154,6 +156,80 @@ function where(q, ids) {
 }
 const statsSql =
   "COUNT(*) count, median(price) median, AVG(price) average, MIN(price) minimum, MAX(price) maximum, p25(price) p25, p75(price) p75, COUNT(DISTINCT seller_id) sellers, SUM(online) online";
+function median(values) {
+  if (!values.length) return null;
+  const a = [...values].sort((x, y) => x - y);
+  const m = a.length >> 1;
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+const saleWindows = [
+  ["day", 1],
+  ["week", 7],
+  ["month", 30],
+];
+export function sales(db, q, now = Date.now()) {
+  const ids =
+    q.category === "all"
+      ? db
+          .prepare("SELECT id FROM categories")
+          .all()
+          .map((c) => c.id)
+      : q.category.split(",");
+  const since = new Date(now - 30 * 86400000).toISOString();
+  const filters = where(q, null);
+  const marks = ids.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT f.*,c.name category,c.color FROM (SELECT sa.*,s.collected_at sold_at,s.category_id FROM sales sa JOIN snapshots s ON s.id=sa.snapshot_id WHERE sa.verified=1 AND s.category_id IN (${marks}) AND s.collected_at>=?) f JOIN categories c ON c.id=f.category_id WHERE ${filters.sql} ORDER BY f.sold_at DESC`,
+    )
+    .all(...ids, since, ...filters.args)
+    .map((r) => ({
+      offer_id: r.offer_id,
+      title: r.title,
+      price: r.price,
+      seller_id: r.seller_id,
+      seller: r.seller,
+      url: r.url,
+      category: r.category,
+      color: r.color,
+      sold_at: r.sold_at,
+      kind: r.kind,
+      mmr: attributeNumber(r.attributes, "solommr"),
+      new_mmr: r.new_mmr,
+      sale_type: attributeText(r.attributes, "type1"),
+    }));
+  const summary = Object.fromEntries(
+    saleWindows.map(([key, days]) => {
+      const from = new Date(now - days * 86400000).toISOString();
+      const prices = rows.filter((r) => r.sold_at >= from).map((r) => r.price);
+      return [
+        key,
+        {
+          count: prices.length,
+          median: median(prices),
+          total: Math.round(prices.reduce((a, b) => a + b, 0) * 100) / 100,
+        },
+      ];
+    }),
+  );
+  const pairs = db
+    .prepare(
+      `SELECT COUNT(*) n, MIN(collected_at) first FROM snapshots WHERE category_id IN (${marks}) AND collected_at>=?`,
+    )
+    .get(...ids, since);
+  const pending = db
+    .prepare(
+      `SELECT COUNT(*) n FROM sales sa JOIN snapshots s ON s.id=sa.snapshot_id WHERE sa.verified IS NULL AND sa.attempts<3 AND s.category_id IN (${marks})`,
+    )
+    .get(...ids).n;
+  return {
+    summary,
+    pending,
+    list: rows.slice(0, 2000),
+    snapshots: pairs.n,
+    trackedSince: pairs.first,
+  };
+}
 export function analyze(db, q) {
   const selected = selection(db, q);
   const current = where(
@@ -210,11 +286,48 @@ export function analyze(db, q) {
     )
     .all(...current.args, (page - 1) * 12)
     .map((o) => ({ ...o, attributes: JSON.parse(o.attributes) }));
-  const sellers = db
+  const saleStats = sales(db, q);
+  const soldBy = new Map();
+  for (const sale of saleStats.list) {
+    const entry = soldBy.get(sale.seller_id) ?? {
+      seller: sale.seller,
+      prices: [],
+    };
+    entry.prices.push(sale.price);
+    soldBy.set(sale.seller_id, entry);
+  }
+  const listed = db
     .prepare(
-      `SELECT seller_id,seller,COUNT(*) count,median(price) median,MAX(reviews) reviews,MAX(online) online FROM observations WHERE ${current.sql} GROUP BY seller_id ORDER BY count DESC LIMIT 12`,
+      `SELECT seller_id,seller,COUNT(*) count,median(price) median,MIN(price) minimum,MAX(reviews) reviews,MAX(online) online FROM observations WHERE ${current.sql} GROUP BY seller_id`,
     )
     .all(...current.args);
+  const sellerRows = new Map(
+    listed.map((s) => [s.seller_id, { ...s, sold: 0, soldMedian: null }]),
+  );
+  for (const [id, entry] of soldBy) {
+    const row = sellerRows.get(id) ?? {
+      seller_id: id,
+      seller: entry.seller,
+      count: 0,
+      median: null,
+      minimum: null,
+      reviews: null,
+      online: null,
+    };
+    sellerRows.set(id, {
+      ...row,
+      sold: entry.prices.length,
+      soldMedian: median(entry.prices),
+    });
+  }
+  // Cheapest lot under the current filters first; sellers with only past
+  // sales (nothing listed now) go last.
+  const sellers = [...sellerRows.values()].sort(
+    (a, b) =>
+      (a.minimum ?? Infinity) - (b.minimum ?? Infinity) ||
+      b.sold - a.sold ||
+      b.count - a.count,
+  );
   const comparison = db
     .prepare(
       `SELECT s.category_id category,${statsSql} FROM observations JOIN snapshots s ON s.id=snapshot_id WHERE ${current.sql} GROUP BY s.category_id`,
@@ -267,7 +380,52 @@ export function analyze(db, q) {
     page,
     pages: Math.max(1, Math.ceil(stats.count / 12)),
     snapshots: selected.snaps.length,
+    sales: saleStats,
     timezone: "Europe/Moscow",
+  };
+}
+// One seller within the current category, period and lot filters.
+export function sellerDetail(db, q, sellerId) {
+  const selected = selection(db, q);
+  const all = where(
+    q,
+    selected.snaps.map((s) => s.id),
+  );
+  const own = `${all.sql} AND seller_id=?`;
+  const series = db
+    .prepare(
+      `SELECT s.collected_at,COUNT(*) count,median(price) median,MIN(price) minimum FROM observations JOIN snapshots s ON s.id=snapshot_id WHERE ${own} GROUP BY s.id ORDER BY s.collected_at`,
+    )
+    .all(...all.args, sellerId);
+  const current = where(
+    q,
+    selected.latest.map((s) => s.id),
+  );
+  const lots = db
+    .prepare(
+      `SELECT o.*,s.collected_at FROM observations o JOIN snapshots s ON s.id=o.snapshot_id WHERE ${current.sql} AND seller_id=? ORDER BY price LIMIT 200`,
+    )
+    .all(...current.args, sellerId)
+    .map((o) => ({
+      ...o,
+      attributes: JSON.parse(o.attributes),
+      mmr: attributeNumber(o.attributes, "solommr"),
+    }));
+  const sold = sales(db, q).list.filter((s) => s.seller_id === sellerId);
+  const name =
+    lots[0]?.seller ??
+    sold[0]?.seller ??
+    db
+      .prepare("SELECT seller FROM observations WHERE seller_id=? LIMIT 1")
+      .get(sellerId)?.seller ??
+    sellerId;
+  return {
+    seller_id: sellerId,
+    seller: name,
+    series,
+    lots,
+    sales: sold,
+    soldMedian: median(sold.map((s) => s.price)),
   };
 }
 export function exportRows(db, q) {
