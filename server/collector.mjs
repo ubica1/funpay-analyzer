@@ -126,6 +126,69 @@ export async function fetchCategory(url) {
   }
   return parseOffers(Buffer.concat(chunks).toString("utf8"), url);
 }
+// Opens the page of each vanished lot: FunPay answers 404 for a removed lot
+// and shows the order form for a live one that was just not listed.
+export async function checkOffer(offerId) {
+  if (!/^\d+$/.test(offerId)) throw new Error("Неверный номер лота");
+  const response = await fetch(`https://funpay.com/lots/offer?id=${offerId}`, {
+    redirect: "error",
+    signal: AbortSignal.timeout(30000),
+    headers: {
+      "User-Agent": "FunPayMarketAnalyzer/0.1 (public listing statistics)",
+      "Accept-Language": "ru-RU,ru;q=0.9",
+      Cookie: "cy=rub",
+    },
+  });
+  if (response.status === 404) return "removed";
+  if (!response.ok) throw new Error(`FunPay HTTP ${response.status}`);
+  const title = load(await response.text())("title").text();
+  if (/captcha|access denied|just a moment/i.test(title))
+    throw Object.assign(new Error("FunPay ограничил доступ"), {
+      blocked: true,
+    });
+  return /не найдено/i.test(title) ? "removed" : "alive";
+}
+export async function verifySales(
+  db,
+  { check = checkOffer, limit = 900, pause = 1000, stopped = () => false } = {},
+) {
+  const pending = db
+    .prepare(
+      "SELECT DISTINCT offer_id FROM sales WHERE verified IS NULL AND attempts<3 ORDER BY snapshot_id DESC LIMIT ?",
+    )
+    .all(limit);
+  let removed = 0;
+  let alive = 0;
+  for (let i = 0; i < pending.length && !stopped(); i++) {
+    const { offer_id } = pending[i];
+    try {
+      if ((await check(offer_id)) === "removed") {
+        db.prepare(
+          "UPDATE sales SET verified=1 WHERE offer_id=? AND verified IS NULL",
+        ).run(offer_id);
+        removed++;
+      } else {
+        db.prepare(
+          "DELETE FROM sales WHERE offer_id=? AND verified IS NULL",
+        ).run(offer_id);
+        alive++;
+      }
+    } catch (e) {
+      db.prepare(
+        "UPDATE sales SET attempts=attempts+1 WHERE offer_id=? AND verified IS NULL",
+      ).run(offer_id);
+      if (e.blocked) break;
+    }
+    if (pause && i < pending.length - 1)
+      await new Promise((resolve) => setTimeout(resolve, pause));
+  }
+  return {
+    checked: removed + alive,
+    removed,
+    alive,
+    left: pending.length - removed - alive,
+  };
+}
 export function createCollector(db) {
   let running = false;
   let nextAt = null;
@@ -175,6 +238,17 @@ export function createCollector(db) {
         }
         if (i < cats.length - 1)
           await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+      if (!stopped) {
+        const result = await verifySales(db, { stopped: () => stopped });
+        if (result.checked || result.left)
+          log(
+            null,
+            result.left ? "error" : "success",
+            `Проверка пропавших лотов: удалено ${result.removed}, ещё продаются ${result.alive}` +
+              (result.left ? `, не проверено ${result.left}` : ""),
+            result.removed,
+          );
       }
       const cutoff = new Date(
         Date.now() - settings(db).retentionDays * 86400000,

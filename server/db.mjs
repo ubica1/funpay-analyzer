@@ -22,6 +22,7 @@ export function createDatabase(path = ":memory:") {
     CREATE INDEX IF NOT EXISTS snapshots_time ON snapshots(category_id,collected_at);
     CREATE TABLE IF NOT EXISTS observations(snapshot_id INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE, offer_id TEXT NOT NULL, title TEXT NOT NULL, price REAL NOT NULL CHECK(price>=0), seller_id TEXT NOT NULL, seller TEXT NOT NULL, reviews INTEGER NOT NULL, online INTEGER NOT NULL, attributes TEXT NOT NULL, url TEXT NOT NULL, PRIMARY KEY(snapshot_id,offer_id));
     CREATE INDEX IF NOT EXISTS observations_offer ON observations(offer_id,snapshot_id);
+    CREATE INDEX IF NOT EXISTS observations_seller ON observations(snapshot_id,seller_id);
     CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, category_id TEXT, status TEXT NOT NULL, message TEXT NOT NULL, count INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `);
@@ -59,6 +60,27 @@ export function createDatabase(path = ":memory:") {
     });
   db.function("attribute_number", { deterministic: true }, attributeNumber);
   db.function("attribute_text", { deterministic: true }, attributeText);
+  const version = db
+    .prepare("SELECT value FROM settings WHERE key='salesVersion'")
+    .get();
+  const stale = version?.value !== String(salesVersion);
+  if (stale)
+    db.exec(
+      "DROP TABLE IF EXISTS sales; DELETE FROM settings WHERE key='salesBackfilled';",
+    );
+  db.exec(salesTable);
+  if (stale) {
+    // Recompute sales for snapshots saved before the current detection rules.
+    for (const s of db
+      .prepare(
+        "SELECT id,category_id,collected_at FROM snapshots ORDER BY collected_at",
+      )
+      .all())
+      recordSales(db, s.category_id, s.id, s.collected_at);
+    db.prepare("INSERT OR REPLACE INTO settings VALUES('salesVersion',?)").run(
+      String(salesVersion),
+    );
+  }
   return db;
 }
 export function settings(db) {
@@ -112,12 +134,47 @@ export function saveSnapshot(
         JSON.stringify(o.attributes),
         o.url,
       );
+    recordSales(db, categoryId, id, at);
     db.exec("COMMIT");
     return id;
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
   }
+}
+const salesVersion = 4;
+// verified: NULL while the lot page is not checked yet, 1 once FunPay reports
+// the lot as removed. Lots found alive are deleted from the table.
+const salesTable = `CREATE TABLE IF NOT EXISTS sales(snapshot_id INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE, offer_id TEXT NOT NULL, title TEXT NOT NULL, price REAL NOT NULL, seller_id TEXT NOT NULL, seller TEXT NOT NULL, reviews INTEGER NOT NULL, online INTEGER NOT NULL, attributes TEXT NOT NULL, url TEXT NOT NULL, kind TEXT NOT NULL, new_mmr REAL, verified INTEGER, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(snapshot_id,offer_id));
+  CREATE INDEX IF NOT EXISTS sales_pending ON sales(verified);`;
+// A sale lot is a sale candidate when it vanishes between two consecutive
+// snapshots of its category, unless its seller re-posted it under a new id
+// with the same title and price. FunPay lists only part of a category and the
+// set of sellers shown shifts, so every candidate is confirmed later by
+// opening its page (see verifySales in collector.mjs). A lot that stays but
+// whose account changes (MMR differs by 300 or more) counts right away.
+// Only account sales are tracked: a rented lot hides and comes back, and a
+// bought service (boost, calibration) usually stays listed.
+function recordSales(db, categoryId, id, at) {
+  const prev = db
+    .prepare(
+      "SELECT id FROM snapshots WHERE category_id=? AND collected_at<? ORDER BY collected_at DESC LIMIT 1",
+    )
+    .get(categoryId, at);
+  if (!prev) return;
+  const mmr = (alias) => `attribute_number(${alias}.attributes,'solommr')`;
+  const forSale = "attribute_text(o.attributes,'type1')='продажа'";
+  db.prepare(
+    `INSERT OR IGNORE INTO sales SELECT ?,o.offer_id,o.title,o.price,o.seller_id,o.seller,o.reviews,o.online,o.attributes,o.url,'gone',NULL,NULL,0 FROM observations o
+    WHERE o.snapshot_id=? AND ${forSale}
+      AND NOT EXISTS(SELECT 1 FROM observations x WHERE x.snapshot_id=? AND x.offer_id=o.offer_id)
+      AND NOT EXISTS(SELECT 1 FROM observations x WHERE x.snapshot_id=? AND x.seller_id=o.seller_id AND x.title=o.title AND x.price=o.price
+        AND NOT EXISTS(SELECT 1 FROM observations y WHERE y.snapshot_id=? AND y.offer_id=x.offer_id))`,
+  ).run(id, prev.id, id, id, prev.id);
+  db.prepare(
+    `INSERT OR IGNORE INTO sales SELECT ?,o.offer_id,o.title,o.price,o.seller_id,o.seller,o.reviews,o.online,o.attributes,o.url,'replaced',${mmr("x")},1,0 FROM observations o JOIN observations x ON x.snapshot_id=? AND x.offer_id=o.offer_id
+    WHERE o.snapshot_id=? AND ${forSale} AND ABS(${mmr("o")}-${mmr("x")})>=300`,
+  ).run(id, id, prev.id);
 }
 
 export function seedDemo(db) {
@@ -209,4 +266,5 @@ export function seedDemo(db) {
       );
     });
   }
+  db.exec("UPDATE sales SET verified=1");
 }

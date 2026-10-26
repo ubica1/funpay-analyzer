@@ -72,14 +72,7 @@ export type Analytics = {
   series: (Stats & { day: string; category: string })[];
   histogram: { from: number; to: number; count: number }[];
   offers: Offer[];
-  sellers: {
-    seller_id: string;
-    seller: string;
-    count: number;
-    median: number;
-    reviews: number;
-    online: number;
-  }[];
+  sellers: SellerRow[];
   comparison: (Stats & { category: string })[];
   facets: { key: string; value: string }[];
   coverage: {
@@ -96,5 +89,56 @@ export type Analytics = {
   page: number;
   pages: number;
   snapshots: number;
+  sales: Sales;
   timezone: string;
+};
+export type Sale = {
+  offer_id: string;
+  title: string;
+  price: number;
+  seller_id: string;
+  seller: string;
+  url: string;
+  category: string;
+  color: string;
+  sold_at: string;
+  kind: "gone" | "replaced";
+  mmr: number | null;
+  new_mmr: number | null;
+  sale_type: string | null;
+};
+export type SaleWindow = "day" | "week" | "month";
+export type Sales = {
+  summary: Record<
+    SaleWindow,
+    { count: number; median: number | null; total: number }
+  >;
+  pending: number;
+  list: Sale[];
+  snapshots: number;
+  trackedSince: string | null;
+};
+export type SellerRow = {
+  seller_id: string;
+  seller: string;
+  count: number;
+  median: number | null;
+  minimum: number | null;
+  reviews: number | null;
+  online: number | null;
+  sold: number;
+  soldMedian: number | null;
+};
+export type SellerDetail = {
+  seller_id: string;
+  seller: string;
+  series: {
+    collected_at: string;
+    count: number;
+    median: number;
+    minimum: number;
+  }[];
+  lots: (Offer & { mmr: number | null })[];
+  sales: Sale[];
+  soldMedian: number | null;
 };

@@ -31,6 +31,7 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  ShoppingCart,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -54,7 +55,17 @@ import {
   BarChart,
   Bar,
 } from "recharts";
-import type { Analytics, Bootstrap, Filters, Offer, Settings } from "./types";
+import type {
+  Analytics,
+  Bootstrap,
+  Filters,
+  Offer,
+  Sales,
+  SaleWindow,
+  SellerDetail,
+  SellerRow,
+  Settings,
+} from "./types";
 import "./styles.css";
 
 const number = (n: number | null | undefined) =>
@@ -440,6 +451,7 @@ function App() {
             ["overview", "Обзор рынка", LayoutDashboard],
             ["offers", "Предложения", Layers3],
             ["sellers", "Продавцы", Users],
+            ["sales", "Продажи", ShoppingCart],
             ["collector", "Сбор данных", Database],
           ].map(([id, label, Icon]) => (
             <button
@@ -518,9 +530,11 @@ function App() {
                   ? "Центр сбора данных"
                   : tab === "sellers"
                     ? "Продавцы рынка"
-                    : tab === "offers"
-                      ? "Все предложения"
-                      : "Обзор рынка"}
+                    : tab === "sales"
+                      ? "Продажи"
+                      : tab === "offers"
+                        ? "Все предложения"
+                        : "Обзор рынка"}
               </h1>
               <p>
                 {tab === "collector"
@@ -1200,71 +1214,13 @@ function App() {
                             )}
                           </>
                         )}
-                        {tab === "sellers" ? (
-                          <section className="panel">
-                            <div className="panel-heading">
-                              <div>
-                                <h2>Продавцы в выборке</h2>
-                                <p>
-                                  Топ-12 по количеству предложений · отзывы
-                                  относятся ко всему профилю
-                                </p>
-                              </div>
-                              <Users size={20} />
-                            </div>
-                            <div className="table-scroll">
-                              <table>
-                                <thead>
-                                  <tr>
-                                    <th>Продавец</th>
-                                    <th>Предложения</th>
-                                    <th>Медианная цена</th>
-                                    <th>Отзывы</th>
-                                    <th>Статус в снимке</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {data.sellers.map((s, i) => (
-                                    <tr key={s.seller_id}>
-                                      <td>
-                                        <div className="seller-cell">
-                                          <span
-                                            className="seller-avatar"
-                                            style={{
-                                              background: avatarColors[i % 4],
-                                            }}
-                                          >
-                                            {s.seller.slice(0, 2).toUpperCase()}
-                                          </span>
-                                          <strong>{s.seller}</strong>
-                                        </div>
-                                      </td>
-                                      <td>{number(s.count)}</td>
-                                      <td className="price-cell">
-                                        {money(s.median)}
-                                      </td>
-                                      <td>
-                                        <Star size={12} /> {number(s.reviews)}
-                                      </td>
-                                      <td>
-                                        <span
-                                          className={
-                                            s.online
-                                              ? "online-label"
-                                              : "offline-label"
-                                          }
-                                        >
-                                          {s.online
-                                            ? "Был онлайн"
-                                            : "Был офлайн"}
-                                        </span>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </section>
+                        {tab === "sales" ? (
+                          <SalesPanel sales={data.sales} />
+                        ) : tab === "sellers" ? (
+                          <SellersPanel
+                            sellers={data.sellers}
+                            filters={filters}
+                          />
                         ) : (
                           <section className="panel offers-panel">
                             <div className="panel-heading">
@@ -1749,6 +1705,505 @@ const tooltipStyle = {
   fontSize: 12,
   boxShadow: "0 8px 32px #172e1f12",
 };
+const saleWindows: [SaleWindow, string][] = [
+  ["day", "Сутки"],
+  ["week", "Неделя"],
+  ["month", "Месяц"],
+];
+
+const sellerFromHash = () =>
+  decodeURIComponent(location.hash.match(/^#seller\/(.+)$/)?.[1] ?? "") || null;
+
+function SellersPanel({
+  sellers,
+  filters,
+}: {
+  sellers: SellerRow[];
+  filters: Filters;
+}) {
+  const [open, setOpen] = useState<string | null>(sellerFromHash);
+  const [page, setPage] = useState(1);
+  useEffect(() => {
+    const sync = () => setOpen(sellerFromHash());
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+  useEffect(() => setPage(1), [sellers]);
+  if (open)
+    return (
+      <SellerProfile
+        id={open}
+        filters={filters}
+        onBack={() => {
+          history.pushState(null, "", location.pathname + location.search);
+          setOpen(null);
+        }}
+      />
+    );
+  const pages = Math.max(1, Math.ceil(sellers.length / 50));
+  const current = Math.min(page, pages);
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <div>
+          <h2>
+            Продавцы{" "}
+            <span className="count-badge">{number(sellers.length)}</span>
+          </h2>
+          <p>
+            По нижней цене лота с учётом фильтров · продажи за 30 дней · нажмите
+            на продавца, чтобы открыть профиль
+          </p>
+        </div>
+        <Users size={20} />
+      </div>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Продавец</th>
+              <th>Нижняя цена</th>
+              <th>Медиана</th>
+              <th>Лотов</th>
+              <th>Продано</th>
+              <th>Медиана продаж</th>
+              <th>Отзывы</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sellers.slice((current - 1) * 50, current * 50).map((s, i) => (
+              <tr
+                key={s.seller_id}
+                className="clickable-row"
+                onClick={() => {
+                  location.hash = `seller/${encodeURIComponent(s.seller_id)}`;
+                }}
+              >
+                <td>
+                  <div className="seller-cell">
+                    <span
+                      className="seller-avatar"
+                      style={{ background: avatarColors[i % 4] }}
+                    >
+                      {s.seller.slice(0, 2).toUpperCase()}
+                    </span>
+                    <strong>{s.seller}</strong>
+                  </div>
+                </td>
+                <td className="price-cell">{money(s.minimum)}</td>
+                <td>{money(s.median)}</td>
+                <td>{number(s.count)}</td>
+                <td>{number(s.sold)}</td>
+                <td>{money(s.soldMedian)}</td>
+                <td>
+                  <Star size={12} /> {number(s.reviews)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {pages > 1 && (
+        <div className="segmented">
+          <button disabled={current <= 1} onClick={() => setPage(current - 1)}>
+            <ChevronLeft size={14} />
+          </button>
+          <button className="selected">
+            {current} / {pages}
+          </button>
+          <button
+            disabled={current >= pages}
+            onClick={() => setPage(current + 1)}
+          >
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SellerProfile({
+  id,
+  filters,
+  onBack,
+}: {
+  id: string;
+  filters: Filters;
+  onBack: () => void;
+}) {
+  const [detail, setDetail] = useState<SellerDetail | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    setError("");
+    api<SellerDetail>(
+      `/api/sellers/${encodeURIComponent(id)}?${query(filters)}`,
+    )
+      .then((d) => !cancelled && setDetail(d))
+      .catch((e) => !cancelled && setError(e.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [id, filters]);
+  const back = (
+    <button className="button" onClick={onBack}>
+      <ChevronLeft size={15} /> Все продавцы
+    </button>
+  );
+  if (error)
+    return (
+      <section className="panel">
+        {back}
+        <p>{error}</p>
+      </section>
+    );
+  if (!detail)
+    return (
+      <div className="loading-panel">
+        <LoaderCircle className="spinning" /> Загружаем профиль…
+      </div>
+    );
+  const last = detail.series.at(-1);
+  return (
+    <>
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            {back}
+            <h2>
+              {detail.seller}{" "}
+              <a
+                href={`https://funpay.com/users/${detail.seller_id}/`}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="Профиль на FunPay"
+              >
+                <ExternalLink size={15} />
+              </a>
+            </h2>
+            <p>Все цифры с учётом выбранной категории, периода и фильтров</p>
+          </div>
+        </div>
+        <div className="stat-grid">
+          <Stat
+            label="Лотов сейчас"
+            value={number(detail.lots.length)}
+            Icon={Layers3}
+            note="в последнем снимке"
+            wide
+          />
+          <Stat
+            label="Нижняя цена"
+            value={money(last?.minimum)}
+            Icon={Target}
+            note={`Медиана ${money(last?.median)}`}
+            wide
+          />
+          <Stat
+            label="Продано за 30 дней"
+            value={number(detail.sales.length)}
+            Icon={ShoppingCart}
+            note={`Медиана продаж ${money(detail.soldMedian)}`}
+            wide
+          />
+        </div>
+      </section>
+      <section className="panel price-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Изменение цен</h2>
+            <p>Нижняя и медианная цена лотов продавца в каждом снимке</p>
+          </div>
+        </div>
+        {detail.series.length ? (
+          <div className="chart-area">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart
+                data={detail.series}
+                margin={{ top: 10, right: 15, left: 0, bottom: 5 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 5"
+                  vertical={false}
+                  stroke="#e9edf0"
+                />
+                <XAxis
+                  dataKey="collected_at"
+                  tickFormatter={(v) => dateLabel(v).split(",")[0]}
+                  axisLine={false}
+                  tickLine={false}
+                  tickMargin={14}
+                  minTickGap={35}
+                />
+                <YAxis
+                  tickFormatter={compact}
+                  axisLine={false}
+                  tickLine={false}
+                  width={49}
+                />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  labelFormatter={(v) => dateLabel(String(v))}
+                  formatter={(v, name) => [
+                    money(Number(v)),
+                    name === "minimum" ? "Нижняя цена" : "Медиана",
+                  ]}
+                />
+                <Area
+                  type="stepAfter"
+                  dataKey="median"
+                  stroke="#a49bfa"
+                  fill="none"
+                  strokeWidth={2}
+                />
+                <Area
+                  type="stepAfter"
+                  dataKey="minimum"
+                  stroke="#20a678"
+                  fill="#71d9b0"
+                  fillOpacity={0.15}
+                  strokeWidth={2.5}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p>В выбранном периоде у продавца нет лотов под эти фильтры.</p>
+        )}
+      </section>
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>
+              Продажи <span className="count-badge">{detail.sales.length}</span>
+            </h2>
+            <p>Подтверждённые продажи за 30 дней</p>
+          </div>
+        </div>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Когда</th>
+                <th>Лот</th>
+                <th>MMR</th>
+                <th>Цена</th>
+              </tr>
+            </thead>
+            <tbody>
+              {detail.sales.map((s) => (
+                <tr key={`${s.sold_at}-${s.offer_id}`}>
+                  <td>{dateLabel(s.sold_at)}</td>
+                  <td>
+                    <a
+                      className="offer-title"
+                      href={s.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {s.title}
+                    </a>
+                  </td>
+                  <td>{s.mmr == null ? "—" : number(s.mmr)}</td>
+                  <td className="price-cell">{money(s.price)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>
+              Лоты сейчас{" "}
+              <span className="count-badge">{detail.lots.length}</span>
+            </h2>
+            <p>Последний снимок, от дешёвых к дорогим</p>
+          </div>
+        </div>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Лот</th>
+                <th>MMR</th>
+                <th>Цена</th>
+              </tr>
+            </thead>
+            <tbody>
+              {detail.lots.map((o) => (
+                <tr key={o.offer_id}>
+                  <td>
+                    <a
+                      className="offer-title"
+                      href={o.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {o.title}
+                    </a>
+                  </td>
+                  <td>{o.mmr == null ? "—" : number(o.mmr)}</td>
+                  <td className="price-cell">{money(o.price)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function SalesPanel({ sales }: { sales: Sales }) {
+  const [period, setPeriod] = useState<SaleWindow>("week");
+  const [page, setPage] = useState(1);
+  const days = { day: 1, week: 7, month: 30 }[period];
+  const from = new Date(Date.now() - days * 86400000).toISOString();
+  const rows = sales.list.filter((s) => s.sold_at >= from);
+  const pages = Math.max(1, Math.ceil(rows.length / 25));
+  // Until history covers the whole window, say how long was actually observed.
+  const observed = (key: SaleWindow) => {
+    if (!sales.trackedSince) return "";
+    const hours = (Date.now() - Date.parse(sales.trackedSince)) / 3600000;
+    const window = { day: 24, week: 168, month: 720 }[key];
+    if (hours >= window) return "";
+    return hours < 48
+      ? ` · наблюдение ${number(hours)} ч`
+      : ` · наблюдение ${number(hours / 24)} дн`;
+  };
+  const current = Math.min(page, pages);
+  return (
+    <>
+      <div className="stat-grid">
+        {saleWindows.map(([key, label]) => (
+          <Stat
+            key={key}
+            label={`Продажи за ${{ day: "сутки", week: "неделю", month: "месяц" }[key]}`}
+            value={number(sales.summary[key].count)}
+            Icon={ShoppingCart}
+            note={`Медиана ${money(sales.summary[key].median)} · сумма ${money(sales.summary[key].total)}${observed(key)}`}
+            wide
+          />
+        ))}
+      </div>
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>
+              Вероятные продажи{" "}
+              <span className="count-badge">{number(rows.length)}</span>
+            </h2>
+            <p>
+              Лот пропал из выдачи, и его страница на FunPay удалена, или в лоте
+              сменился аккаунт (другой MMR). Снятые продавцом лоты отличить от
+              проданных нельзя.
+              {sales.pending > 0 &&
+                ` Ещё проверяется лотов: ${number(sales.pending)}.`}
+              {sales.trackedSince &&
+                ` Отслеживается с ${dateLabel(sales.trackedSince)}.`}
+            </p>
+          </div>
+          <div className="segmented">
+            {saleWindows.map(([key, label]) => (
+              <button
+                key={key}
+                className={period === key ? "selected" : ""}
+                onClick={() => {
+                  setPeriod(key);
+                  setPage(1);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {sales.snapshots < 2 ? (
+          <div className="empty-state">
+            <h2>Нужно хотя бы два снимка</h2>
+            <p>
+              Продажи определяются сравнением соседних снимков. Включите
+              расписание в «Сборе данных» или соберите данные ещё раз позже.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Когда</th>
+                    <th>Лот</th>
+                    <th>MMR</th>
+                    <th>Цена</th>
+                    <th>Продавец</th>
+                    <th>Признак</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice((current - 1) * 25, current * 25).map((s) => (
+                    <tr key={`${s.sold_at}-${s.offer_id}`}>
+                      <td>{dateLabel(s.sold_at)}</td>
+                      <td>
+                        <a
+                          className="offer-title"
+                          href={s.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {s.title}
+                        </a>
+                      </td>
+                      <td>{s.mmr == null ? "—" : number(s.mmr)}</td>
+                      <td className="price-cell">{money(s.price)}</td>
+                      <td>
+                        <a
+                          href={`https://funpay.com/users/${s.seller_id}/`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {s.seller}
+                        </a>
+                      </td>
+                      <td>
+                        {s.kind === "gone"
+                          ? "Лот снят"
+                          : `Аккаунт заменён (MMR ${number(s.new_mmr)})`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {pages > 1 && (
+              <div className="segmented">
+                <button
+                  disabled={current <= 1}
+                  onClick={() => setPage(current - 1)}
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <button className="selected">
+                  {current} / {pages}
+                </button>
+                <button
+                  disabled={current >= pages}
+                  onClick={() => setPage(current + 1)}
+                >
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    </>
+  );
+}
+
 function Stat({
   label,
   value,
