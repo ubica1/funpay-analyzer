@@ -1,3 +1,5 @@
+import { backfillExternalFields } from "./external-fields.mjs";
+import { platforms } from "./platforms.mjs";
 import { attributeNumber, attributeText } from "./account-fields.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
@@ -26,9 +28,33 @@ export function createDatabase(path = ":memory:") {
     CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, category_id TEXT, status TEXT NOT NULL, message TEXT NOT NULL, count INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `);
-  const put = db.prepare("INSERT OR IGNORE INTO categories VALUES(?,?,?,?,?)");
+  const columns = db.prepare("PRAGMA table_info(categories)").all();
+  if (!columns.some((c) => c.name === "platform")) {
+    db.exec(
+      "ALTER TABLE categories ADD COLUMN platform TEXT NOT NULL DEFAULT 'funpay'; ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'accounts'; UPDATE categories SET kind=id;",
+    );
+  }
+  db.exec(`DELETE FROM snapshots WHERE category_id IN (SELECT id FROM categories WHERE platform IN ('playerauctions','epicnpc'));
+    DELETE FROM runs WHERE category_id IN (SELECT id FROM categories WHERE platform IN ('playerauctions','epicnpc'));
+    DELETE FROM categories WHERE platform IN ('playerauctions','epicnpc');`);
+  const put = db.prepare(
+    "INSERT OR IGNORE INTO categories(id,name,url,enabled,color) VALUES(?,?,?,?,?)",
+  );
   for (const [id, name, node, enabled, color] of categories)
     put.run(id, name, `https://funpay.com/lots/${node}/`, enabled, color);
+  db.exec("UPDATE categories SET kind=id WHERE platform='funpay'");
+  for (const p of platforms.filter((p) => p.id !== "funpay"))
+    db.prepare(
+      "INSERT OR IGNORE INTO categories(id,name,url,enabled,color,platform,kind) VALUES(?,?,?,?,?,?,?)",
+    ).run(
+      `${p.id}-accounts`,
+      `Аккаунты · ${p.name}`,
+      p.url,
+      p.automatic === false ? 0 : 1,
+      "#78bdce",
+      p.id,
+      "accounts",
+    );
   for (const [key, value] of Object.entries({
     intervalMinutes: 60,
     retentionDays: 30,
@@ -38,6 +64,15 @@ export function createDatabase(path = ":memory:") {
       key,
       JSON.stringify(value),
     );
+  if (
+    !db
+      .prepare("SELECT 1 FROM settings WHERE key='browserSourcesEnabled'")
+      .get()
+  ) {
+    db.exec(
+      "UPDATE categories SET enabled=1 WHERE platform IN ('eldorado','playerok'); INSERT INTO settings VALUES('browserSourcesEnabled','true');",
+    );
+  }
   for (const [name, q] of [
     ["median", 0.5],
     ["p25", 0.25],
@@ -81,6 +116,7 @@ export function createDatabase(path = ":memory:") {
       String(salesVersion),
     );
   }
+  backfillExternalFields(db);
   return db;
 }
 export function settings(db) {
@@ -156,6 +192,11 @@ const salesTable = `CREATE TABLE IF NOT EXISTS sales(snapshot_id INTEGER NOT NUL
 // Only account sales are tracked: a rented lot hides and comes back, and a
 // bought service (boost, calibration) usually stays listed.
 function recordSales(db, categoryId, id, at) {
+  if (
+    db.prepare("SELECT platform FROM categories WHERE id=?").get(categoryId)
+      ?.platform !== "funpay"
+  )
+    return;
   const prev = db
     .prepare(
       "SELECT id FROM snapshots WHERE category_id=? AND collected_at<? ORDER BY collected_at DESC LIMIT 1",
@@ -265,6 +306,37 @@ export function seedDemo(db) {
         at.toISOString(),
       );
     });
+    for (const [pi, p] of platforms
+      .filter((p) => p.id !== "funpay")
+      .entries()) {
+      const offers = Array.from({ length: 35 + pi * 3 }, (_, i) => ({
+        id: `demo-${p.id}-${i}`,
+        title: `Демо · Аккаунт Dota 2 · ${1500 + i * 100} MMR`,
+        price:
+          Math.round(
+            (p.currency === "USD" ? 12 : 1100) *
+              (1 + i / 14 + pi / 8 + day / 100) *
+              100,
+          ) / 100,
+        sellerId: `demo-${p.id}-seller-${i % 8}`,
+        seller: `${p.name} Demo ${(i % 8) + 1}`,
+        reviews: i * 17,
+        online: i % 3 === 0,
+        attributes: {
+          type1: "продажа",
+          solommr: String(1500 + i * 100),
+          currency: p.currency,
+        },
+        url: p.url,
+      }));
+      saveSnapshot(
+        db,
+        `${p.id}-accounts`,
+        offers,
+        { advertised: offers.length },
+        at.toISOString(),
+      );
+    }
   }
   db.exec("UPDATE sales SET verified=1");
 }

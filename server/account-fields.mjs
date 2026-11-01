@@ -58,7 +58,7 @@ export function offerSort(sort) {
     hours_desc: ["time", "DESC"],
   }[sort];
   if (numeric) {
-    const expression = `attribute_number(attributes, '${numeric[0]}')`;
+    const expression = `COALESCE(attribute_number(attributes, '${numeric[0]}'),attribute_number(attributes, '${numeric[0]}_min'))`;
     return `${expression} IS NULL ASC, ${expression} ${numeric[1]}, price ASC, offer_id ASC`;
   }
   return (
