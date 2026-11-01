@@ -28,6 +28,11 @@ export const accountFilterDefaults: AccountFilters = {
   hoursMin: "",
   hoursMax: "",
 };
+export const initialAccountFilters: AccountFilters = {
+  ...accountFilterDefaults,
+  saleType: "sale",
+  accountType: "ranked",
+};
 export const accountRanges = [
   { key: "mmr", label: "MMR" },
   { key: "decency", label: "Порядочность" },
@@ -36,6 +41,9 @@ export const accountRanges = [
   { key: "hours", label: "Часов" },
 ] as const;
 const labels: Record<string, string> = {
+  ranked_access_source: "Источник доступа к рейтингу",
+  ranked_access: "Доступ к рейтингу",
+  parameter_source: "Источник параметров",
   type1: "Сделка",
   type: "Тип аккаунта",
   solommr: "MMR",
@@ -47,7 +55,19 @@ const labels: Record<string, string> = {
   auto: "Автовыдача",
   region: "Регион",
 };
-export const attributeLabel = (key: string) => labels[key] ?? key;
+export const attributeLabel = (key: string): string =>
+  key.endsWith("_min")
+    ? `${attributeLabel(key.slice(0, -4))} от`
+    : key.endsWith("_max")
+      ? `${attributeLabel(key.slice(0, -4))} до`
+      : (labels[key] ?? key);
+export function mmrDisplay(a: Record<string, string>) {
+  const exact = numericMmr(a);
+  if (exact != null) return exact.toLocaleString("ru-RU");
+  return a.solommr_min
+    ? `${Number(a.solommr_min).toLocaleString("ru-RU")}${a.solommr_max ? `–${Number(a.solommr_max).toLocaleString("ru-RU")}` : "+"}`
+    : "—";
+}
 export function numericMmr(attributes: Record<string, string>) {
   const value = attributes.solommr?.replace(/\s/g, "").replace(",", ".");
   return value && /^\d+(?:\.\d+)?$/.test(value) && Number(value) <= 1e9
@@ -55,6 +75,16 @@ export function numericMmr(attributes: Record<string, string>) {
     : null;
 }
 export function attributeDisplay(key: string, value: string) {
+  if (key === "ranked_access")
+    return (
+      (
+        {
+          open: "Открыт",
+          closed: "Закрыт",
+          unknown: "Не подтверждён",
+        } as Record<string, string>
+      )[value] ?? value
+    );
   if (key === "auto") return value === "1" ? "Да" : "Нет";
   if (key === "type1" || key === "type")
     return value.charAt(0).toLocaleUpperCase("ru-RU") + value.slice(1);
@@ -79,7 +109,15 @@ export function offerTags(attributes: Record<string, string>) {
   const keys = [
     ...priority,
     ...Object.keys(attributes).filter(
-      (k) => !priority.includes(k) && k !== "auto",
+      (k) =>
+        !priority.includes(k) &&
+        ![
+          "auto",
+          "parameter_source",
+          "online_known",
+          "platform",
+          "currency",
+        ].includes(k),
     ),
   ];
   return keys

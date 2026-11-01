@@ -6,8 +6,18 @@ type Props = {
   filters: Filters;
   onChange: (values: Partial<Filters>) => void;
   expanded: boolean;
+  available?: Record<string, number>;
+  total?: number;
 };
-export function AccountFilters({ filters, onChange, expanded }: Props) {
+export function AccountFilters({
+  filters,
+  onChange,
+  expanded,
+  available,
+  total,
+}: Props) {
+  const supports = (key: string) =>
+    available == null || (available[key] ?? 0) > 0;
   const chips: { label: string; reset: Partial<Filters> }[] = [];
   if (filters.saleType !== "all")
     chips.push({
@@ -55,6 +65,15 @@ export function AccountFilters({ filters, onChange, expanded }: Props) {
           </button>
         )}
       </div>
+      {available && total != null && (
+        <p className="account-filter-hint">
+          «С рейтингом» — только подтверждённый открытый доступ. Наличие MMR
+          само по себе его не подтверждает. Параметры доступны не у всех
+          объявлений. Точное MMR или его границы указаны у {available.mmr ?? 0}{" "}
+          из {total}. Неизвестные значения исключаются при фильтрации.
+          Неактивное поле означает, что данных для него нет.
+        </p>
+      )}
       <div className="account-primary-filters">
         <div className="deal-type">
           <span className="field-caption">Тип сделки</span>
@@ -73,12 +92,13 @@ export function AccountFilters({ filters, onChange, expanded }: Props) {
               <button
                 type="button"
                 key={value}
+                disabled={value !== "all" && !supports("saleType")}
                 aria-pressed={filters.saleType === value}
                 className={filters.saleType === value ? "selected" : ""}
                 onClick={() =>
                   onChange({
                     saleType: value,
-                    ...(value !== "sale"
+                    ...(filters.market === "funpay" && value !== "sale"
                       ? {
                           accountType: "all" as const,
                           hoursMin: "",
@@ -94,6 +114,7 @@ export function AccountFilters({ filters, onChange, expanded }: Props) {
           </div>
         </div>
         <RangeField
+          disabled={!supports("mmr")}
           name="mmr"
           label="MMR"
           filters={filters}
@@ -103,18 +124,19 @@ export function AccountFilters({ filters, onChange, expanded }: Props) {
           <label className="account-type">
             <span className="field-caption">Тип аккаунта</span>
             <select
+              disabled={!supports("accountType")}
               value={filters.accountType}
               onChange={(e) =>
                 onChange({
                   accountType: e.target.value as Filters["accountType"],
-                  ...(e.target.value !== "ranked"
+                  ...(filters.market === "funpay" && e.target.value !== "ranked"
                     ? { hoursMin: "", hoursMax: "" }
                     : {}),
                 })
               }
             >
               <option value="all">Все типы аккаунтов</option>
-              <option value="ranked">С рейтингом</option>
+              <option value="ranked">С рейтингом (открытый доступ)</option>
               <option value="calibration">Под калибровку (TBD)</option>
               <option value="unranked">Без доступа к рейтинговым играм</option>
             </select>
@@ -123,6 +145,7 @@ export function AccountFilters({ filters, onChange, expanded }: Props) {
         <label className="auto-delivery">
           <input
             type="checkbox"
+            disabled={!supports("auto")}
             checked={filters.auto === "1"}
             onChange={(e) => onChange({ auto: e.target.checked ? "1" : "all" })}
           />{" "}
@@ -141,12 +164,14 @@ export function AccountFilters({ filters, onChange, expanded }: Props) {
               (f) =>
                 f.key !== "mmr" &&
                 (f.key !== "hours" ||
+                  filters.market !== "funpay" ||
                   (filters.saleType === "sale" &&
                     filters.accountType === "ranked")),
             )
             .map(({ key, label }) => (
               <RangeField
                 key={key}
+                disabled={!supports(key)}
                 name={key}
                 label={label}
                 filters={filters}
@@ -187,17 +212,21 @@ function RangeField({
   label,
   filters,
   onChange,
+  disabled,
 }: {
   name: (typeof accountRanges)[number]["key"];
   label: string;
   filters: Filters;
   onChange: Props["onChange"];
+  disabled?: boolean;
 }) {
   return (
     <div className="account-range">
       <span className="field-caption">{label}</span>
       <div className="account-range-inputs">
         <input
+          disabled={disabled}
+          title={disabled ? "Нет данных в выбранных снимках" : undefined}
           type="number"
           min="0"
           step="1"
@@ -208,6 +237,8 @@ function RangeField({
         />
         <span>—</span>
         <input
+          disabled={disabled}
+          title={disabled ? "Нет данных в выбранных снимках" : undefined}
           type="number"
           min="0"
           step="1"

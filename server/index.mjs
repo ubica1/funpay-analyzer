@@ -1,9 +1,10 @@
+import { platforms, marketIds, selectedCategoryIds } from "./platforms.mjs";
 import express from "express";
 import { z } from "zod";
 import { resolve } from "node:path";
 import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { createDatabase, seedDemo, settings } from "./db.mjs";
+import { createDatabase, seedDemo, settings, saveSnapshot } from "./db.mjs";
 import { categoryUrl, createCollector } from "./collector.mjs";
 import {
   analyze,
@@ -50,7 +51,7 @@ export function createApp({
         .status(401)
         .send("Требуется вход");
     });
-  app.use(express.json({ limit: "32kb" }));
+  app.use(express.json({ limit: "5mb" }));
   app.use("/api", (req, res, next) => {
     res.set("Cache-Control", "no-store");
     if (!["GET", "HEAD"].includes(req.method)) {
@@ -75,9 +76,10 @@ export function createApp({
   app.get("/api/health", (req, res) => res.json({ ok: true }));
   app.get("/api/bootstrap", (req, res) =>
     res.json({
+      platforms,
       categories: db
         .prepare(
-          "SELECT c.*, (SELECT MAX(collected_at) FROM snapshots WHERE category_id=c.id) lastCollected FROM categories c",
+          "SELECT c.*, (SELECT MAX(collected_at) FROM snapshots WHERE category_id=c.id) lastCollected, r.status lastStatus, r.message lastMessage, r.started_at lastAttemptAt FROM categories c LEFT JOIN runs r ON r.id=(SELECT MAX(id) FROM runs WHERE category_id=c.id)",
         )
         .all(),
       settings: settings(db),
@@ -98,7 +100,7 @@ export function createApp({
     const q = querySchema.parse(req.query);
     res
       .set("Content-Type", "text/csv; charset=utf-8")
-      .attachment(`funpay-${q.source}-${q.from}-${q.to}.csv`)
+      .attachment(`marketlens-${q.market}-${q.source}-${q.from}-${q.to}.csv`)
       .send(csv(exportRows(source(q), q)));
   });
   app.get("/api/sellers/:id", (req, res) => {
@@ -121,18 +123,120 @@ export function createApp({
         .all(req.params.id, from, to),
     );
   });
+  app.post("/api/import", (req, res) => {
+    const input = z
+      .object({
+        platform: z.enum(
+          platforms.filter((p) => p.id !== "funpay").map((p) => p.id),
+        ),
+        currency: z.enum(["RUB", "USD"]),
+        offers: z
+          .array(
+            z.object({
+              url: z.string().url().max(2000),
+              title: z.string().trim().min(1).max(2000),
+              price: z.number().finite().min(0).max(1e9),
+              seller: z.string().trim().min(1).max(200),
+              sellerId: z.string().min(1).max(300),
+              reviews: z.number().int().min(0).max(1e9).default(0),
+              online: z.boolean().default(false),
+              attributes: z
+                .record(z.string().max(100), z.string().max(300))
+                .default({}),
+            }),
+          )
+          .min(1)
+          .max(10000),
+      })
+      .parse(req.body);
+    const platform = platforms.find((p) => p.id === input.platform);
+    if (input.currency !== platform.currency)
+      return res.status(400).json({
+        error: `Нужны цены в ${platform.currency}; автоматической конвертации нет`,
+      });
+    const offers = input.offers.map((o) => {
+      const url = new URL(o.url);
+      if (
+        url.protocol !== "https:" ||
+        url.hostname !== new URL(platform.url).hostname ||
+        url.username ||
+        url.password ||
+        url.port
+      )
+        throw new z.ZodError([
+          {
+            code: "custom",
+            path: ["offers"],
+            message: "Неверный адрес объявления",
+          },
+        ]);
+      return {
+        ...o,
+        id: `${platform.id}:${url.pathname.replace(/\/$/, "")}${url.search}`,
+        sellerId: `${platform.id}:${o.sellerId}`,
+        attributes: {
+          ...o.attributes,
+          currency: input.currency,
+          platform: platform.id,
+        },
+      };
+    });
+    const snapshotId = saveSnapshot(db, `${platform.id}-accounts`, offers);
+    db.prepare(
+      "INSERT INTO runs(started_at,category_id,status,message,count) VALUES(?,?,?,?,?)",
+    ).run(
+      new Date().toISOString(),
+      `${platform.id}-accounts`,
+      "success",
+      "Импортирован снимок аккаунтов Dota 2",
+      new Set(offers.map((o) => o.id)).size,
+    );
+    res
+      .status(201)
+      .json({ snapshotId, count: new Set(offers.map((o) => o.id)).size });
+  });
   app.post("/api/collect", (req, res) => {
     if (collector.status().running)
       return res.status(409).json({ error: "Сбор уже выполняется" });
-    if (!db.prepare("SELECT 1 FROM categories WHERE enabled=1 LIMIT 1").get())
-      return res.status(400).json({ error: "Включите хотя бы одну категорию" });
-    const last = db.prepare("SELECT MAX(started_at) at FROM runs").get();
+    const scope = z
+      .object({
+        market: z.enum(marketIds).optional(),
+        category: z.string().max(500).default("all"),
+      })
+      .parse(req.body ?? {});
+    const selected = scope.market
+      ? selectedCategoryIds(db, scope)
+      : db
+          .prepare("SELECT id FROM categories")
+          .all()
+          .map((c) => c.id);
+    const cats = db
+      .prepare("SELECT * FROM categories WHERE enabled=1")
+      .all()
+      .filter(
+        (c) =>
+          selected.includes(c.id) &&
+          platforms.some((p) => p.id === c.platform && p.automatic !== false),
+      );
+    if (!cats.length)
+      return res.status(400).json({
+        error:
+          "Для выбранной площадки и категории нет включённого автосбора. Проверьте настройки; для неподключённых площадок доступен импорт.",
+      });
+    const ids = cats.map((c) => c.id);
+    const last = db
+      .prepare(
+        `SELECT MAX(started_at) at FROM runs WHERE category_id IN (${ids.map(() => "?").join(",")})`,
+      )
+      .get(...ids);
     if (last.at && Date.now() - Date.parse(last.at) < 60000)
       return res
         .status(429)
-        .json({ error: "Повторный сбор доступен через минуту" });
-    collector.collect().catch((e) => console.error(e.message));
-    res.status(202).json({ ok: true });
+        .json({ error: "Повторный сбор этой площадки доступен через минуту" });
+    collector.collect(scope).catch((e) => console.error(e.message));
+    res
+      .status(202)
+      .json({ ok: true, collectionId: collector.status().lastCollection?.id });
   });
   app.patch("/api/settings", (req, res) => {
     const v = z
@@ -176,13 +280,10 @@ export function createApp({
     if (db.prepare("SELECT COUNT(*) n FROM categories").get().n >= 20)
       return res.status(400).json({ error: "Максимум 20 категорий" });
     const id = `node-${url.split("/").at(-2)}`;
-    db.prepare("INSERT INTO categories VALUES(?,?,?,?,?)").run(
-      id,
-      v.name,
-      url,
-      1,
-      "#78bdce",
-    );
+    db.prepare(
+      "INSERT INTO categories(id,name,url,enabled,color) VALUES(?,?,?,?,?)",
+    ).run(id, v.name, url, 1, "#78bdce");
+    db.prepare("UPDATE categories SET kind=? WHERE id=?").run(id, id);
     res.status(201).json({ id });
   });
   const dist = resolve("dist");
@@ -194,14 +295,10 @@ export function createApp({
   }
   app.use((err, req, res, next) => {
     console.error(err.message);
-    res
-      .status(err instanceof z.ZodError ? 400 : 500)
-      .json({
-        error:
-          err instanceof z.ZodError
-            ? "Проверьте параметры запроса"
-            : err.message,
-      });
+    res.status(err instanceof z.ZodError ? 400 : 500).json({
+      error:
+        err instanceof z.ZodError ? "Проверьте параметры запроса" : err.message,
+    });
   });
   if (startSchedule) collector.plan();
   return {
@@ -210,7 +307,7 @@ export function createApp({
     collector,
     close: () => {
       collector.stop();
-      if (!collector.status().running) {
+      if (!collector.status().running && !collector.status().verifying) {
         db.close();
         demo?.close();
       }

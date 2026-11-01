@@ -1,9 +1,11 @@
 import { AccountFilters } from "./AccountFilters";
 import {
   accountFilterDefaults,
+  initialAccountFilters,
   attributeLabel,
   attributeDisplay,
   numericMmr,
+  mmrDisplay,
   offerTags,
 } from "./account-fields";
 import React, { useEffect, useState, useMemo, useRef } from "react";
@@ -72,10 +74,10 @@ const number = (n: number | null | undefined) =>
   n == null
     ? "—"
     : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(n);
-const money = (n: number | null | undefined) =>
+const formatMoney = (n: number | null | undefined, currency = "RUB") =>
   n == null
     ? "—"
-    : `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(n)} ₽`;
+    : `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(n)} ${currency === "USD" ? "$" : "₽"}`;
 const compact = (n: number) =>
   n >= 1000
     ? `${(n / 1000).toLocaleString("ru-RU", { maximumFractionDigits: 1 })}к`
@@ -92,7 +94,8 @@ const dateKey = (d: Date) =>
   new Date(d.getTime() + 10800000).toISOString().slice(0, 10);
 const today = dateKey(new Date());
 const initial: Filters = {
-  ...accountFilterDefaults,
+  ...initialAccountFilters,
+  market: "funpay",
   source: "live",
   category: "accounts",
   from: dateKey(new Date(Date.now() - 29 * 86400000)),
@@ -141,6 +144,13 @@ const readStore = <T,>(key: string, fallback: T): T => {
 function App() {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [filters, setFilters] = useState<Filters>(initial);
+  const currency =
+    filters.market === "foreign" ||
+    ["eldorado", "g2g", "z2u"].includes(filters.market)
+      ? "USD"
+      : "RUB";
+  const symbol = currency === "USD" ? "$" : "₽";
+  const money = (n: number | null | undefined) => formatMoney(n, currency);
   const [data, setData] = useState<Analytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -158,7 +168,12 @@ function App() {
   );
   const [onlyFavorites, setOnlyFavorites] = useState(false);
   const [presets, setPresets] = useState<{ name: string; filters: Filters }[]>(
-    () => readStore("ml-presets", []),
+    () =>
+      readStore<{ name: string; filters: Filters }[]>("ml-presets", [])
+        .filter(
+          (p) => !["playerauctions", "epicnpc"].includes(p.filters.market),
+        )
+        .map((p) => ({ ...p, filters: { ...initial, ...p.filters } })),
   );
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
@@ -170,9 +185,26 @@ function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const update = (p: Partial<Filters>) =>
     setFilters((f) => ({ ...f, ...p, page: 1 }));
+  const pendingCollection = useRef<number | null>(null);
   const loadBoot = () =>
     api<Bootstrap>("/api/bootstrap").then((b) => {
       setBoot(b);
+      const result = b.collector.lastCollection;
+      if (
+        pendingCollection.current != null &&
+        result?.id === pendingCollection.current &&
+        result.finishedAt
+      ) {
+        pendingCollection.current = null;
+        setRefresh((n) => n + 1);
+        const successes = result.results.filter((r) => r.status === "success");
+        const failures = result.results.filter((r) => r.status === "error");
+        setToast(
+          failures.length
+            ? `Сбор завершён с ошибками: ${failures.map((r) => `${r.name}: ${r.message}`).join("; ")} ${successes.length ? `Обновлено категорий: ${successes.length}.` : "Новые данные не получены; показан предыдущий снимок."}`
+            : `Данные обновлены: ${successes.length} категорий, ${successes.reduce((sum, r) => sum + (r.count ?? 0), 0)} объявлений.`,
+        );
+      }
       return b;
     });
   useEffect(() => {
@@ -197,10 +229,10 @@ function App() {
             lastRun.current = b.runs[0]?.id;
           })
           .catch(() => {}),
-      10000,
+      boot?.collector.running ? 2000 : 10000,
     );
     return () => clearInterval(timer);
-  }, []);
+  }, [boot?.collector.running]);
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
@@ -306,9 +338,17 @@ function App() {
   const collect = async () => {
     setBusy(true);
     try {
-      await api("/api/collect", { method: "POST", body: "{}" });
+      const result = await api<{ collectionId: number }>("/api/collect", {
+        method: "POST",
+        body: JSON.stringify({
+          market: filters.market,
+          category: filters.category,
+        }),
+      });
+      pendingCollection.current = result.collectionId;
+      setFilters((f) => ({ ...f, source: "live" }));
+      notify("Сбор запущен. Ожидаем новый снимок выбранной площадки.");
       await loadBoot();
-      notify("Сбор запущен. Результаты появятся в журнале.");
     } catch (e) {
       notify((e as Error).message);
     } finally {
@@ -316,6 +356,44 @@ function App() {
     }
   };
   const cats = boot?.categories ?? [];
+  const marketPlatforms = (boot?.platforms ?? []).filter(
+    (p) => p.id === filters.market || p.region === filters.market,
+  );
+  const availableCats = cats.filter((c) =>
+    marketPlatforms.some((p) => p.id === c.platform),
+  );
+  const categoryOptions = [
+    ...new Map(
+      availableCats.map((c) => [
+        c.kind,
+        { id: c.kind, name: c.kind === "accounts" ? "Аккаунты" : c.name },
+      ]),
+    ).values(),
+  ];
+  const marketName =
+    filters.market === "ru"
+      ? "Общий рынок РФ"
+      : filters.market === "foreign"
+        ? "Остальной рынок"
+        : (marketPlatforms[0]?.name ?? "FunPay");
+  const selectMarket = (market: string) => {
+    setData(null);
+    setOffer(null);
+    setOnlyFavorites(false);
+    window.history.replaceState(null, "", location.pathname + location.search);
+    update({
+      ...initialAccountFilters,
+      market,
+      category: "accounts",
+      attribute: "",
+      value: "",
+      min: "",
+      max: "",
+      reviews: "",
+      online: "all",
+      sort: "price_asc",
+    });
+  };
   const categoryName =
     filters.category === "all"
       ? "Все категории"
@@ -435,7 +513,7 @@ function App() {
           </span>
           <span>
             market<span className="brand-light">lens</span>
-            <small>FUNPAY ANALYTICS</small>
+            <small>MARKET ANALYTICS</small>
           </span>
         </a>
         <div className="workspace">
@@ -479,7 +557,9 @@ function App() {
                 ? "Собираем данные"
                 : boot?.settings.scheduled
                   ? "Мониторинг включён"
-                  : "Мониторинг на паузе"}
+                  : boot?.collector.verifying
+                    ? "Проверка лотов в фоне"
+                    : "Мониторинг на паузе"}
               <small>
                 {boot?.settings.scheduled
                   ? `Каждые ${boot.settings.intervalMinutes} мин`
@@ -559,7 +639,9 @@ function App() {
                   size={16}
                   className={boot?.collector.running ? "spinning" : ""}
                 />
-                {boot?.collector.running ? "Собираем…" : "Собрать сейчас"}
+                {boot?.collector.running
+                  ? `Собираем ${boot.collector.completed}/${boot.collector.total}`
+                  : "Собрать сейчас"}
               </button>
             </div>
           </div>
@@ -575,6 +657,37 @@ function App() {
               </button>
             </div>
           )}
+          <div className="market-context">
+            <strong>{marketName}</strong>
+            <span>
+              {currency} ·{" "}
+              {filters.category === "accounts" ? "Аккаунты Dota 2" : "Dota 2"}
+            </span>
+          </div>
+          {filters.source === "live" && tab !== "collector" && data && (
+            <DataFreshness
+              rows={data.freshness}
+              onLatest={() =>
+                update({
+                  to: dateKey(new Date()),
+                  from:
+                    filters.from <= dateKey(new Date())
+                      ? filters.from
+                      : dateKey(new Date()),
+                })
+              }
+            />
+          )}
+          {filters.market !== "funpay" && tab !== "collector" && (
+            <div className="info-box">
+              <Info size={16} />
+              <span>
+                Обзор собранных объявлений. Недоступные площадки и категории без
+                снимков не включаются в расчёты. Продажи отслеживаются только на
+                FunPay.
+              </span>
+            </div>
+          )}
           {tab === "collector" ? (
             <Collector boot={boot} onRefresh={loadBoot} notify={notify} />
           ) : (
@@ -587,7 +700,9 @@ function App() {
                       value={filters.category}
                       onChange={(e) =>
                         update({
-                          ...accountFilterDefaults,
+                          ...(e.target.value === "accounts"
+                            ? initialAccountFilters
+                            : accountFilterDefaults),
                           sort: "price_asc",
                           category: e.target.value,
                           attribute: "",
@@ -596,7 +711,7 @@ function App() {
                       }
                     >
                       <option value="all">Все категории Dota 2</option>
-                      {cats.map((c) => (
+                      {categoryOptions.map((c) => (
                         <option key={c.id} value={c.id}>
                           {c.name}
                         </option>
@@ -674,6 +789,8 @@ function App() {
                 {filters.category === "accounts" && (
                   <AccountFilters
                     filters={filters}
+                    available={data?.availableFilters}
+                    total={data?.availableTotal}
                     onChange={update}
                     expanded={advanced}
                   />
@@ -681,7 +798,7 @@ function App() {
                 {advanced && (
                   <div className="advanced-filters">
                     <label>
-                      Цена от, ₽
+                      Цена от, {symbol}
                       <input
                         type="number"
                         min="0"
@@ -691,7 +808,7 @@ function App() {
                       />
                     </label>
                     <label>
-                      Цена до, ₽
+                      Цена до, {symbol}
                       <input
                         type="number"
                         min="0"
@@ -703,6 +820,9 @@ function App() {
                     <label>
                       Отзывов у продавца
                       <select
+                        disabled={
+                          data != null && !data.availableFilters.reviews
+                        }
                         value={filters.reviews}
                         onChange={(e) => update({ reviews: e.target.value })}
                       >
@@ -723,6 +843,15 @@ function App() {
                       >
                         <option value="">Все параметры</option>
                         {[...new Set(data?.facets.map((f) => f.key))]
+                          .filter(
+                            (k) =>
+                              ![
+                                "online_known",
+                                "parameter_source",
+                                "platform",
+                                "currency",
+                              ].includes(k),
+                          )
                           .filter(
                             (k) =>
                               filters.category !== "accounts" ||
@@ -768,6 +897,7 @@ function App() {
                     <label className="check-label">
                       <input
                         type="checkbox"
+                        disabled={data != null && !data.availableFilters.online}
                         checked={filters.online === "1"}
                         onChange={(e) =>
                           update({ online: e.target.checked ? "1" : "all" })
@@ -813,7 +943,9 @@ function App() {
                       <Check size={13} />{" "}
                       {filters.source === "demo"
                         ? "Демо-выборка"
-                        : "По сохранённым снимкам"}
+                        : data?.freshness.some((row) => row.failed)
+                          ? "Сбор не удался · показана история"
+                          : "По сохранённым снимкам"}
                     </>
                   )}
                 </span>
@@ -930,7 +1062,7 @@ function App() {
                                     <h2>
                                       Динамика рынка{" "}
                                       <span className="subtle-badge">
-                                        {metric === "count" ? "лоты" : "₽"}
+                                        {metric === "count" ? "лоты" : symbol}
                                       </span>
                                     </h2>
                                     <p>
@@ -1166,14 +1298,21 @@ function App() {
                                 </div>
                               </section>
                             </div>
-                            {filters.category === "all" && (
+                            {(filters.category === "all" ||
+                              filters.market === "ru" ||
+                              filters.market === "foreign") && (
                               <section className="panel comparison">
                                 <div className="panel-heading">
                                   <div>
-                                    <h2>Сравнение категорий</h2>
+                                    <h2>
+                                      {filters.category === "accounts"
+                                        ? "Сравнение площадок"
+                                        : "Сравнение категорий"}
+                                    </h2>
                                     <p>
-                                      Цены относятся к разным товарам и единицам
-                                      услуги
+                                      {filters.category === "accounts"
+                                        ? "Последний снимок аккаунтов каждой площадки"
+                                        : "Цены относятся к разным товарам и единицам услуги"}
                                     </p>
                                   </div>
                                 </div>
@@ -1183,7 +1322,14 @@ function App() {
                                       key={c.category}
                                       onClick={() =>
                                         update({
-                                          category: c.category,
+                                          market:
+                                            cats.find(
+                                              (x) => x.id === c.category,
+                                            )?.platform ?? filters.market,
+                                          category:
+                                            cats.find(
+                                              (x) => x.id === c.category,
+                                            )?.kind ?? c.category,
                                           attribute: "",
                                           value: "",
                                         })
@@ -1215,9 +1361,10 @@ function App() {
                           </>
                         )}
                         {tab === "sales" ? (
-                          <SalesPanel sales={data.sales} />
+                          <SalesPanel sales={data.sales} currency={currency} />
                         ) : tab === "sellers" ? (
                           <SellersPanel
+                            key={filters.market}
                             sellers={data.sellers}
                             filters={filters}
                           />
@@ -1283,28 +1430,70 @@ function App() {
                                 <option value="price_desc">
                                   Сначала дороже
                                 </option>
-                                <option value="reviews_desc">
+                                <option
+                                  value="reviews_desc"
+                                  disabled={
+                                    data != null &&
+                                    !data.availableFilters.reviews
+                                  }
+                                >
                                   Больше отзывов
                                 </option>
                                 <option value="title">По названию</option>
                                 {filters.category === "accounts" && (
                                   <>
-                                    <option value="mmr_asc">
+                                    <option
+                                      value="mmr_asc"
+                                      disabled={
+                                        data != null &&
+                                        !data.availableFilters.mmr
+                                      }
+                                    >
                                       MMR: по возрастанию
                                     </option>
-                                    <option value="mmr_desc">
+                                    <option
+                                      value="mmr_desc"
+                                      disabled={
+                                        data != null &&
+                                        !data.availableFilters.mmr
+                                      }
+                                    >
                                       MMR: по убыванию
                                     </option>
-                                    <option value="decency_desc">
+                                    <option
+                                      value="decency_desc"
+                                      disabled={
+                                        data != null &&
+                                        !data.availableFilters.decency
+                                      }
+                                    >
                                       Выше порядочность
                                     </option>
-                                    <option value="politeness_desc">
+                                    <option
+                                      value="politeness_desc"
+                                      disabled={
+                                        data != null &&
+                                        !data.availableFilters.politeness
+                                      }
+                                    >
                                       Выше вежливость
                                     </option>
-                                    <option value="games_desc">
+                                    <option
+                                      value="games_desc"
+                                      disabled={
+                                        data != null &&
+                                        !data.availableFilters.games
+                                      }
+                                    >
                                       Больше матчей
                                     </option>
-                                    <option value="hours_desc">
+                                    <option
+                                      value="hours_desc"
+                                      disabled={
+                                        data != null &&
+                                        !data.availableFilters.hours
+                                      }
+                                    >
                                       Больше часов
                                     </option>
                                   </>
@@ -1369,12 +1558,28 @@ function App() {
                                         </button>
                                       </td>
                                       <td className="offer-title-cell">
-                                        <button
-                                          className="offer-title"
-                                          onClick={() => setOffer(o)}
-                                        >
-                                          {o.title}
-                                        </button>
+                                        {filters.source === "live" ? (
+                                          <a
+                                            className="offer-title"
+                                            href={o.url}
+                                            target={
+                                              o.url.includes("ggsel.net/")
+                                                ? "_self"
+                                                : "_blank"
+                                            }
+                                            rel="noopener noreferrer"
+                                            title="Открыть оригинальное объявление"
+                                          >
+                                            {o.title}
+                                          </a>
+                                        ) : (
+                                          <button
+                                            className="offer-title"
+                                            onClick={() => setOffer(o)}
+                                          >
+                                            {o.title}
+                                          </button>
+                                        )}
                                         <div className="tags">
                                           <span
                                             className="category-tag"
@@ -1396,7 +1601,7 @@ function App() {
                                       </td>
                                       {filters.category === "accounts" && (
                                         <td className="mmr-cell">
-                                          {number(numericMmr(o.attributes))}
+                                          {mmrDisplay(o.attributes)}
                                         </td>
                                       )}
                                       <td>
@@ -1439,8 +1644,25 @@ function App() {
                                           className="icon-button"
                                           onClick={() => setOffer(o)}
                                         >
-                                          <ArrowUpRight size={17} />
+                                          <Clock3 size={17} />
                                         </button>
+                                        {filters.source === "live" && (
+                                          <a
+                                            className="icon-button"
+                                            href={o.url}
+                                            target={
+                                              o.url.includes("ggsel.net/")
+                                                ? "_self"
+                                                : "_blank"
+                                            }
+                                            rel="noopener noreferrer"
+                                            aria-label="Открыть оригинальное объявление"
+                                            title="Открыть оригинальное объявление"
+                                          >
+                                            <ArrowUpRight size={17} />
+                                            <span>Открыть</span>
+                                          </a>
+                                        )}
                                       </td>
                                     </tr>
                                   ))}
@@ -1505,7 +1727,7 @@ function App() {
                           {data.coverage.some(
                             (c) => c.coverage !== null && c.coverage < 1,
                           ) &&
-                            " FunPay отдаёт неполную выборку: показатели не охватывают весь рынок."}
+                            " Площадки отдают неполную выборку: показатели не охватывают весь рынок."}
                           {data.missing.length > 0 &&
                             ` Нет снимков для ${data.missing.length} выбранных категорий.`}
                         </p>
@@ -1537,7 +1759,7 @@ function App() {
           )}
           <footer className="page-footer">
             <span>
-              marketlens <span> / </span> Независимая аналитика FunPay
+              marketlens <span> / </span> Независимая аналитика игровых площадок
             </span>
             <span>
               Наблюдайте за рынком осознанно <Activity size={13} />
@@ -1545,6 +1767,78 @@ function App() {
           </footer>
         </main>
       </div>
+      <aside className="market-sidebar" aria-label="Выбор площадки для анализа">
+        <div className="eyebrow">ИСТОЧНИК АНАЛИЗА</div>
+        <h2>Площадки</h2>
+        <p>Выберите площадку или общий рынок</p>
+        {[
+          { id: "ru", name: "Общий рынок РФ", detail: "4 площадки · ₽" },
+          { id: "foreign", name: "Остальной рынок", detail: "3 площадки · $" },
+        ].map((m) => (
+          <button
+            key={m.id}
+            aria-pressed={filters.market === m.id}
+            className={`market-button aggregate ${filters.market === m.id ? "selected" : ""}`}
+            onClick={() => selectMarket(m.id)}
+          >
+            <strong>{m.name}</strong>
+            <small>{m.detail}</small>
+          </button>
+        ))}
+        {(["ru", "foreign"] as const).map((region) => (
+          <section key={region}>
+            <h3>{region === "ru" ? "РОССИЯ" : "ЗАРУБЕЖНЫЕ"}</h3>
+            {boot?.platforms
+              .filter((p) => p.region === region)
+              .map((p) => {
+                const categories = cats.filter((c) => c.platform === p.id);
+                const latestSnapshot = categories
+                  .map((c) => c.lastCollected)
+                  .filter((at): at is string => !!at)
+                  .sort()
+                  .at(-1);
+                const lastAttempt = [...categories]
+                  .filter((c) => c.lastAttemptAt)
+                  .sort((a, b) =>
+                    (b.lastAttemptAt ?? "").localeCompare(
+                      a.lastAttemptAt ?? "",
+                    ),
+                  )[0];
+                return (
+                  <button
+                    key={p.id}
+                    aria-pressed={filters.market === p.id}
+                    className={`market-button ${filters.market === p.id ? "selected" : ""}`}
+                    onClick={() => selectMarket(p.id)}
+                  >
+                    <span>
+                      <strong>{p.name}</strong>
+                      <b>{p.currency === "USD" ? "$" : "₽"}</b>
+                    </span>
+                    <small title={lastAttempt?.lastMessage ?? undefined}>
+                      {filters.source === "demo"
+                        ? "Демонстрационная выборка"
+                        : lastAttempt?.lastStatus === "error"
+                          ? "Последний сбор — ошибка"
+                          : p.automatic === false
+                            ? "Импорт снимка · без автосбора"
+                            : latestSnapshot
+                              ? "Последний снимок"
+                              : "Ожидает сбора"}
+                    </small>
+                    {filters.source === "live" && latestSnapshot && (
+                      <small>Данные: {dateLabel(latestSnapshot)}</small>
+                    )}
+                  </button>
+                );
+              })}
+          </section>
+        ))}
+        <div className="market-note">
+          РФ — в рублях, остальные — в долларах. Общий рынок объединяет
+          последние снимки выбранной категории.
+        </div>
+      </aside>
       {toast && (
         <div className="toast" role="status">
           <Info size={17} />
@@ -1634,12 +1928,17 @@ function App() {
               Снимок от {dateLabel(offer.collected_at)} · UTC+3
             </p>
             <div className="drawer-attrs">
-              {Object.entries(offer.attributes).map(([k, v]) => (
-                <div key={k}>
-                  <span>{attributeLabel(k)}</span>
-                  <strong>{attributeDisplay(k, v)}</strong>
-                </div>
-              ))}
+              {Object.entries(offer.attributes)
+                .filter(
+                  ([k]) =>
+                    !["online_known", "platform", "currency"].includes(k),
+                )
+                .map(([k, v]) => (
+                  <div key={k}>
+                    <span>{attributeLabel(k)}</span>
+                    <strong>{attributeDisplay(k, v)}</strong>
+                  </div>
+                ))}
             </div>
             <h3>Изменение цены за период</h3>
             {historyError ? (
@@ -1683,13 +1982,28 @@ function App() {
               </span>
             </div>
             {filters.source === "live" && (
+              <button
+                className="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(offer.url);
+                    notify("Ссылка скопирована");
+                  } catch {
+                    notify(`Ссылка: ${offer.url}`);
+                  }
+                }}
+              >
+                Скопировать ссылку
+              </button>
+            )}
+            {filters.source === "live" && (
               <a
                 className="button primary"
                 href={offer.url}
-                target="_blank"
+                target={offer.url.includes("ggsel.net/") ? "_self" : "_blank"}
                 rel="noreferrer"
               >
-                Открыть на FunPay <ExternalLink size={16} />
+                Открыть на площадке <ExternalLink size={16} />
               </a>
             )}
           </section>
@@ -1714,6 +2028,57 @@ const saleWindows: [SaleWindow, string][] = [
 const sellerFromHash = () =>
   decodeURIComponent(location.hash.match(/^#seller\/(.+)$/)?.[1] ?? "") || null;
 
+function DataFreshness({
+  rows,
+  onLatest,
+}: {
+  rows: Analytics["freshness"];
+  onLatest: () => void;
+}) {
+  const dates = [
+    ...new Set(
+      rows.map((row) => row.displayedAt).filter((at): at is string => !!at),
+    ),
+  ].sort();
+  const failed = rows.filter((row) => row.failed);
+  const outsidePeriod = rows.some(
+    (row) => row.latestSnapshotAt && row.latestSnapshotAt !== row.displayedAt,
+  );
+  if (!dates.length && !failed.length && !outsidePeriod) return null;
+  return (
+    <section
+      className={`data-freshness ${failed.length ? "failed" : ""}`}
+      aria-label="Актуальность данных"
+      role="status"
+    >
+      <strong>
+        {dates.length
+          ? `Данные от ${dateLabel(dates[0])}${dates.length > 1 ? ` — ${dateLabel(dates.at(-1)!)}` : ""} · МСК`
+          : "В выбранном периоде нет сохранённых снимков"}
+      </strong>
+      {failed.map((row) => (
+        <p key={row.id}>
+          <b>
+            {row.name}: сбор{" "}
+            {row.lastAttempt ? dateLabel(row.lastAttempt.started_at) : ""} не
+            удался.
+          </b>{" "}
+          {row.lastAttempt?.message}{" "}
+          {row.displayedAt ? "Показан предыдущий снимок." : "Новых данных нет."}
+        </p>
+      ))}
+      {outsidePeriod && (
+        <p>
+          Есть более свежие снимки за пределами выбранного периода.{" "}
+          <button className="text-button" onClick={onLatest}>
+            Показать последние данные
+          </button>
+        </p>
+      )}
+    </section>
+  );
+}
+
 function SellersPanel({
   sellers,
   filters,
@@ -1721,6 +2086,14 @@ function SellersPanel({
   sellers: SellerRow[];
   filters: Filters;
 }) {
+  const money = (n: number | null | undefined) =>
+    formatMoney(
+      n,
+      filters.market === "foreign" ||
+        ["eldorado", "g2g", "z2u"].includes(filters.market)
+        ? "USD"
+        : "RUB",
+    );
   const [open, setOpen] = useState<string | null>(sellerFromHash);
   const [page, setPage] = useState(1);
   useEffect(() => {
@@ -1832,6 +2205,14 @@ function SellerProfile({
   filters: Filters;
   onBack: () => void;
 }) {
+  const money = (n: number | null | undefined) =>
+    formatMoney(
+      n,
+      filters.market === "foreign" ||
+        ["eldorado", "g2g", "z2u"].includes(filters.market)
+        ? "USD"
+        : "RUB",
+    );
   const [detail, setDetail] = useState<SellerDetail | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -1874,10 +2255,14 @@ function SellerProfile({
             <h2>
               {detail.seller}{" "}
               <a
-                href={`https://funpay.com/users/${detail.seller_id}/`}
+                href={
+                  /^\d+$/.test(detail.seller_id)
+                    ? `https://funpay.com/users/${detail.seller_id}/`
+                    : (detail.lots[0]?.url ?? "#")
+                }
                 target="_blank"
                 rel="noreferrer"
-                aria-label="Профиль на FunPay"
+                aria-label="Открыть источник продавца"
               >
                 <ExternalLink size={15} />
               </a>
@@ -2057,7 +2442,8 @@ function SellerProfile({
   );
 }
 
-function SalesPanel({ sales }: { sales: Sales }) {
+function SalesPanel({ sales, currency }: { sales: Sales; currency: string }) {
+  const money = (n: number | null | undefined) => formatMoney(n, currency);
   const [period, setPeriod] = useState<SaleWindow>("week");
   const [page, setPage] = useState(1);
   const days = { day: 1, week: 7, month: 30 }[period];
@@ -2137,6 +2523,7 @@ function SalesPanel({ sales }: { sales: Sales }) {
                   <tr>
                     <th>Когда</th>
                     <th>Лот</th>
+                    <th>Площадка</th>
                     <th>MMR</th>
                     <th>Цена</th>
                     <th>Продавец</th>
@@ -2156,6 +2543,9 @@ function SalesPanel({ sales }: { sales: Sales }) {
                         >
                           {s.title}
                         </a>
+                      </td>
+                      <td>
+                        <span className="category-tag">{s.platformName}</span>
                       </td>
                       <td>{s.mmr == null ? "—" : number(s.mmr)}</td>
                       <td className="price-cell">{money(s.price)}</td>
@@ -2378,7 +2768,7 @@ function Collector({
         <div className="next-run">
           <span className={boot.settings.scheduled ? "live-dot" : "idle-dot"} />
           {boot.collector.running
-            ? "Сбор выполняется"
+            ? `Сбор: ${boot.collector.completed}/${boot.collector.total} · ${boot.collector.current.join(", ")}`
             : boot.collector.nextAt
               ? `Следующий сбор: ${dateLabel(boot.collector.nextAt)}`
               : "Расписание выключено"}
@@ -2388,7 +2778,9 @@ function Collector({
         <div className="panel-heading">
           <div>
             <h2>Что отслеживаем</h2>
-            <p>Включите нужные разделы Dota 2</p>
+            <p>
+              FunPay — доступные разделы; остальные площадки — аккаунты Dota 2
+            </p>
           </div>
           <Layers3 size={20} />
         </div>
@@ -2404,6 +2796,8 @@ function Collector({
                   {c.lastCollected
                     ? `Последний снимок: ${dateLabel(c.lastCollected)}`
                     : "Снимков пока нет"}
+                  {boot.platforms.find((p) => p.id === c.platform)?.browser &&
+                    " · Автосбор через браузер"}
                 </small>
               </span>
               <input
@@ -2416,6 +2810,64 @@ function Collector({
             </label>
           ))}
         </div>
+      </section>
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Загрузить снимок площадки</h2>
+            <p>
+              Дополнительный способ загрузки данных: JSON со списком аккаунтов
+              Dota 2. Цены РФ — RUB, зарубежные — USD.
+            </p>
+          </div>
+        </div>
+        <label className="button">
+          Выбрать JSON-файл
+          <input
+            type="file"
+            accept=".json,application/json"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              try {
+                if (file.size > 5 * 1024 * 1024)
+                  throw new Error("Максимум 5 МБ");
+                const result = await api<{ count: number }>("/api/import", {
+                  method: "POST",
+                  body: await file.text(),
+                });
+                await onRefresh();
+                notify(`Загружено объявлений: ${result.count}`);
+              } catch (error) {
+                notify((error as Error).message);
+              }
+              e.target.value = "";
+            }}
+          />
+        </label>
+        <details className="info-box">
+          <summary>Формат файла</summary>
+          <pre style={{ whiteSpace: "pre-wrap" }}>
+            {JSON.stringify(
+              {
+                platform: "eldorado",
+                currency: "USD",
+                offers: [
+                  {
+                    url: "https://www.eldorado.gg/account/example",
+                    title: "Dota 2 account",
+                    price: 25,
+                    seller: "Seller",
+                    sellerId: "seller-1",
+                    attributes: { solommr: "3000", type1: "продажа" },
+                  },
+                ],
+              },
+              null,
+              2,
+            )}
+          </pre>
+        </details>
       </section>
       <section className="panel add-category">
         <div className="panel-heading">

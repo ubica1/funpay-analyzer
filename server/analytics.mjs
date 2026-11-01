@@ -1,3 +1,10 @@
+import { freshness } from "./freshness.mjs";
+import {
+  platforms,
+  marketIds,
+  marketCurrency,
+  selectedCategoryIds,
+} from "./platforms.mjs";
 import {
   accountRanges,
   saleTypes,
@@ -23,6 +30,7 @@ const optionalNumber = z.preprocess(
 );
 export const querySchema = z
   .object({
+    market: z.enum(marketIds).default("funpay"),
     source: z.enum(["live", "demo"]).default("live"),
     category: z.string().max(500).default("accounts"),
     from: date,
@@ -84,13 +92,7 @@ export const querySchema = z
     "Максимальный период — 367 дней",
   );
 function selection(db, q, from = q.from, to = q.to) {
-  const ids =
-    q.category === "all"
-      ? db
-          .prepare("SELECT id FROM categories")
-          .all()
-          .map((c) => c.id)
-      : q.category.split(",");
+  const ids = selectedCategoryIds(db, q);
   const start = new Date(`${from}T00:00:00+03:00`).toISOString();
   const end = new Date(
     Date.parse(`${to}T00:00:00+03:00`) + 86400000,
@@ -138,24 +140,34 @@ function where(q, ids) {
     args.push(saleTypes[q.saleType]);
   }
   if (q.accountType && q.accountType !== "all") {
-    clauses.push("attribute_text(attributes, 'type') = ?");
-    args.push(accountTypes[q.accountType]);
+    if (q.accountType === "ranked") {
+      clauses.push(
+        "COALESCE(attribute_text(attributes,'ranked_access'), CASE WHEN json_extract(attributes,'$.platform') IS NULL AND attribute_text(attributes,'type')='с рейтингом' THEN 'open' END)='open'",
+      );
+    } else {
+      clauses.push("attribute_text(attributes, 'type') = ?");
+      args.push(accountTypes[q.accountType]);
+    }
   }
   if (q.auto === "1") clauses.push("json_extract(attributes, '$.auto') = '1'");
   for (const [name, field] of accountRanges) {
     if (q[`${name}Min`] != null) {
-      clauses.push("attribute_number(attributes, ?) >= ?");
-      args.push(field, q[`${name}Min`]);
+      clauses.push(
+        "COALESCE(attribute_number(attributes, ?), attribute_number(attributes, ?)) >= ?",
+      );
+      args.push(field, `${field}_min`, q[`${name}Min`]);
     }
     if (q[`${name}Max`] != null) {
-      clauses.push("attribute_number(attributes, ?) <= ?");
-      args.push(field, q[`${name}Max`]);
+      clauses.push(
+        "COALESCE(attribute_number(attributes, ?), attribute_number(attributes, ?)) <= ?",
+      );
+      args.push(field, `${field}_max`, q[`${name}Max`]);
     }
   }
   return { sql: clauses.join(" AND "), args };
 }
 const statsSql =
-  "COUNT(*) count, median(price) median, AVG(price) average, MIN(price) minimum, MAX(price) maximum, p25(price) p25, p75(price) p75, COUNT(DISTINCT seller_id) sellers, SUM(online) online";
+  "COUNT(*) count, median(price) median, AVG(price) average, MIN(price) minimum, MAX(price) maximum, p25(price) p25, p75(price) p75, COUNT(DISTINCT CASE WHEN seller_id NOT LIKE '%:unknown' THEN seller_id END) sellers, SUM(online) online";
 function median(values) {
   if (!values.length) return null;
   const a = [...values].sort((x, y) => x - y);
@@ -168,19 +180,13 @@ const saleWindows = [
   ["month", 30],
 ];
 export function sales(db, q, now = Date.now()) {
-  const ids =
-    q.category === "all"
-      ? db
-          .prepare("SELECT id FROM categories")
-          .all()
-          .map((c) => c.id)
-      : q.category.split(",");
+  const ids = selectedCategoryIds(db, q);
   const since = new Date(now - 30 * 86400000).toISOString();
   const filters = where(q, null);
   const marks = ids.map(() => "?").join(",");
   const rows = db
     .prepare(
-      `SELECT f.*,c.name category,c.color FROM (SELECT sa.*,s.collected_at sold_at,s.category_id FROM sales sa JOIN snapshots s ON s.id=sa.snapshot_id WHERE sa.verified=1 AND s.category_id IN (${marks}) AND s.collected_at>=?) f JOIN categories c ON c.id=f.category_id WHERE ${filters.sql} ORDER BY f.sold_at DESC`,
+      `SELECT f.*,c.name category,c.platform,c.color FROM (SELECT sa.*,s.collected_at sold_at,s.category_id FROM sales sa JOIN snapshots s ON s.id=sa.snapshot_id WHERE sa.verified=1 AND s.category_id IN (${marks}) AND s.collected_at>=?) f JOIN categories c ON c.id=f.category_id WHERE ${filters.sql} ORDER BY f.sold_at DESC`,
     )
     .all(...ids, since, ...filters.args)
     .map((r) => ({
@@ -191,6 +197,9 @@ export function sales(db, q, now = Date.now()) {
       seller: r.seller,
       url: r.url,
       category: r.category,
+      platform: r.platform,
+      platformName:
+        platforms.find((p) => p.id === r.platform)?.name ?? r.platform,
       color: r.color,
       sold_at: r.sold_at,
       kind: r.kind,
@@ -282,7 +291,7 @@ export function analyze(db, q) {
   const page = Math.min(q.page, Math.max(1, Math.ceil(stats.count / 12)));
   const offers = db
     .prepare(
-      `SELECT o.*,c.name category,c.color,s.collected_at FROM observations o JOIN snapshots s ON s.id=o.snapshot_id JOIN categories c ON c.id=s.category_id WHERE ${current.sql} ORDER BY ${sort} LIMIT 12 OFFSET ?`,
+      `SELECT o.*,c.name category,c.platform,c.color,s.collected_at FROM observations o JOIN snapshots s ON s.id=o.snapshot_id JOIN categories c ON c.id=s.category_id WHERE ${current.sql} ORDER BY ${sort} LIMIT 12 OFFSET ?`,
     )
     .all(...current.args, (page - 1) * 12)
     .map((o) => ({ ...o, attributes: JSON.parse(o.attributes) }));
@@ -352,21 +361,46 @@ export function analyze(db, q) {
       `WITH values_list AS (SELECT DISTINCT j.key,j.value FROM observations,json_each(attributes) j WHERE ${facetWhere.sql}), ranked AS (SELECT key,value,ROW_NUMBER() OVER (PARTITION BY key ORDER BY value) position FROM values_list) SELECT key,value FROM ranked WHERE position<=60 ORDER BY key,value`,
     )
     .all(...facetWhere.args);
+  const availableFilters = Object.fromEntries(
+    [
+      ...accountRanges.map(([name, field]) => [
+        name,
+        `COALESCE(attribute_number(attributes,'${field}'),attribute_number(attributes,'${field}_min'),attribute_number(attributes,'${field}_max')) IS NOT NULL`,
+      ]),
+      ["saleType", "attribute_text(attributes,'type1') IS NOT NULL"],
+      ["accountType", "attribute_text(attributes,'type') IS NOT NULL"],
+      ["auto", "json_extract(attributes,'$.auto') IN ('0','1')"],
+      ["reviews", "reviews>0 OR json_extract(attributes,'$.platform') IS NULL"],
+      [
+        "online",
+        "online=1 OR json_extract(attributes,'$.platform') IS NULL OR json_extract(attributes,'$.online_known')='1'",
+      ],
+    ].map(([key, condition]) => [
+      key,
+      db
+        .prepare(
+          `SELECT COUNT(*) n FROM observations WHERE ${facetWhere.sql} AND (${condition})`,
+        )
+        .get(...facetWhere.args).n,
+    ]),
+  );
+  const availableTotal = db
+    .prepare(`SELECT COUNT(*) n FROM observations WHERE ${facetWhere.sql}`)
+    .get(...facetWhere.args).n;
   const coverage = selected.latest.map((s) => ({
     ...s,
     name: db
       .prepare("SELECT name FROM categories WHERE id=?")
       .get(s.category_id)?.name,
   }));
-  const missing = (
-    q.category === "all"
-      ? db
-          .prepare("SELECT id FROM categories WHERE enabled=1")
-          .all()
-          .map((x) => x.id)
-      : q.category.split(",")
-  ).filter((id) => !selected.latest.some((s) => s.category_id === id));
+  const missing = selectedCategoryIds(db, q, q.category === "all").filter(
+    (id) => !selected.latest.some((s) => s.category_id === id),
+  );
   return {
+    currency: marketCurrency(q.market),
+    freshness: freshness(db, q, selected.latest),
+    availableFilters,
+    availableTotal,
     stats,
     previous,
     series,
@@ -435,11 +469,12 @@ export function exportRows(db, q) {
   );
   return db
     .prepare(
-      `SELECT s.collected_at,c.name category,o.offer_id,o.title,o.price,o.seller,o.reviews,o.online,o.attributes,o.url FROM observations o JOIN snapshots s ON s.id=o.snapshot_id JOIN categories c ON c.id=s.category_id WHERE ${w.sql} ORDER BY ${offerSort(q.sort)}`,
+      `SELECT s.collected_at,c.name category,c.platform,o.offer_id,o.title,o.price,o.seller,o.reviews,o.online,o.attributes,o.url FROM observations o JOIN snapshots s ON s.id=o.snapshot_id JOIN categories c ON c.id=s.category_id WHERE ${w.sql} ORDER BY ${offerSort(q.sort)}`,
     )
     .all(...w.args)
     .map((row) => ({
       ...row,
+      currency: marketCurrency(q.market),
       mmr: attributeNumber(row.attributes, "solommr"),
       sale_type: attributeText(row.attributes, "type1"),
       account_type: attributeText(row.attributes, "type"),
@@ -454,6 +489,8 @@ export function csv(rows) {
   const keys = [
     "collected_at",
     "category",
+    "platform",
+    "currency",
     "offer_id",
     "title",
     "price",

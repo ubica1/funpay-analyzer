@@ -9,10 +9,10 @@ RUN pnpm build
 
 FROM node:24-bookworm-slim
 WORKDIR /app
-ENV NODE_ENV=production HOST=0.0.0.0 PORT=3400 DATABASE_PATH=/app/data/market.sqlite
+ENV NODE_ENV=production HOST=0.0.0.0 PORT=3400 DATABASE_PATH=/app/data/market.sqlite PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN npm install -g pnpm@11.25.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --prod --frozen-lockfile && mkdir /app/data && chown node:node /app/data
+RUN pnpm install --prod --frozen-lockfile && pnpm exec playwright-core install --with-deps chromium && mkdir /app/data && chown node:node /app/data
 COPY --from=build /app/dist ./dist
 COPY server ./server
 USER node

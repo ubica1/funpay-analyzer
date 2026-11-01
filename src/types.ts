@@ -1,11 +1,25 @@
 import type { AccountFilters } from "./account-fields";
+export type Platform = {
+  id: string;
+  name: string;
+  automatic?: boolean;
+  browser?: boolean;
+  region: "ru" | "foreign";
+  currency: "RUB" | "USD";
+  url: string;
+};
 export type Category = {
+  platform: string;
+  kind: string;
   id: string;
   name: string;
   url: string;
   enabled: number;
   color: string;
   lastCollected: string | null;
+  lastStatus: string | null;
+  lastMessage: string | null;
+  lastAttemptAt: string | null;
 };
 export type Settings = {
   intervalMinutes: number;
@@ -13,9 +27,29 @@ export type Settings = {
   scheduled: boolean;
 };
 export type Bootstrap = {
+  platforms: Platform[];
   categories: Category[];
   settings: Settings;
-  collector: { running: boolean; nextAt: string | null };
+  collector: {
+    running: boolean;
+    nextAt: string | null;
+    verifying: boolean;
+    completed: number;
+    total: number;
+    current: string[];
+    lastCollection: {
+      id: number;
+      startedAt: string;
+      finishedAt: string | null;
+      results: {
+        categoryId: string;
+        name: string;
+        status: "success" | "error";
+        count?: number;
+        message?: string;
+      }[];
+    } | null;
+  };
   runs: {
     id: number;
     category: string;
@@ -27,6 +61,7 @@ export type Bootstrap = {
   hasData: boolean;
 };
 export type Filters = AccountFilters & {
+  market: string;
   source: "live" | "demo";
   category: string;
   from: string;
@@ -67,6 +102,17 @@ export type Offer = {
   collected_at: string;
 };
 export type Analytics = {
+  freshness: {
+    id: string;
+    name: string;
+    displayedAt: string | null;
+    latestSnapshotAt: string | null;
+    lastAttempt: { started_at: string; status: string; message: string } | null;
+    failed: boolean;
+  }[];
+  availableFilters: Record<string, number>;
+  availableTotal: number;
+  currency: "RUB" | "USD";
   stats: Stats;
   previous: Stats;
   series: (Stats & { day: string; category: string })[];
@@ -93,6 +139,8 @@ export type Analytics = {
   timezone: string;
 };
 export type Sale = {
+  platform: string;
+  platformName: string;
   offer_id: string;
   title: string;
   price: number;
