@@ -43,11 +43,14 @@ test("browser marketplaces collect automatically; static sources fall back to br
     { platform: "playerok", url: playerok.url },
     {
       loadHtml: async () => {
-        throw new Error("Browser source should skip redundant static request");
+        throw new Error("Playerok uses its public catalog");
       },
       render: async () => {
+        throw new Error("Playerok should not need a browser");
+      },
+      playerok: async () => {
         calls++;
-        return fixture("playerok");
+        return parseExternalOffers(fixture("playerok"), "playerok");
       },
     },
   );

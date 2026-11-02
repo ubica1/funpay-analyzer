@@ -251,13 +251,11 @@ test("retired marketplaces are absent from catalog, regional selections and acce
   try {
     assert.equal(
       db
-        .prepare(
-          "SELECT COUNT(*) n FROM categories WHERE platform IN ('playerauctions','epicnpc')",
-        )
+        .prepare("SELECT COUNT(*) n FROM categories WHERE platform='epicnpc'")
         .get().n,
       0,
     );
-    assert.throws(() => q({ market: "playerauctions" }));
+    assert.equal(q({ market: "playerauctions" }).market, "playerauctions");
     assert.throws(() => q({ market: "epicnpc" }));
   } finally {
     db.close();

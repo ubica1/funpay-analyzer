@@ -146,7 +146,7 @@ function App() {
   const [filters, setFilters] = useState<Filters>(initial);
   const currency =
     filters.market === "foreign" ||
-    ["eldorado", "g2g", "z2u"].includes(filters.market)
+    ["eldorado", "g2g", "z2u", "playerauctions"].includes(filters.market)
       ? "USD"
       : "RUB";
   const symbol = currency === "USD" ? "$" : "₽";
@@ -170,9 +170,7 @@ function App() {
   const [presets, setPresets] = useState<{ name: string; filters: Filters }[]>(
     () =>
       readStore<{ name: string; filters: Filters }[]>("ml-presets", [])
-        .filter(
-          (p) => !["playerauctions", "epicnpc"].includes(p.filters.market),
-        )
+        .filter((p) => p.filters.market !== "epicnpc")
         .map((p) => ({ ...p, filters: { ...initial, ...p.filters } })),
   );
   const [saveOpen, setSaveOpen] = useState(false);
@@ -2090,7 +2088,7 @@ function SellersPanel({
     formatMoney(
       n,
       filters.market === "foreign" ||
-        ["eldorado", "g2g", "z2u"].includes(filters.market)
+        ["eldorado", "g2g", "z2u", "playerauctions"].includes(filters.market)
         ? "USD"
         : "RUB",
     );
@@ -2209,7 +2207,7 @@ function SellerProfile({
     formatMoney(
       n,
       filters.market === "foreign" ||
-        ["eldorado", "g2g", "z2u"].includes(filters.market)
+        ["eldorado", "g2g", "z2u", "playerauctions"].includes(filters.market)
         ? "USD"
         : "RUB",
     );
