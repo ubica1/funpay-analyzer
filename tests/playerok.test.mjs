@@ -109,6 +109,7 @@ test("Playerok explicit false is closed, missing access is unknown, rental and z
     "аренда",
   );
   assert.equal(playerokAttributes("Account", { mmr: 0 }).solommr, "0");
+  assert.equal(playerokAttributes("Автовыдача", {}, false).auto, "0");
   assert.equal(
     playerokAttributes("Account", { mmr: 6000, "rating available": true })
       .ranked_access_source,
@@ -136,7 +137,7 @@ test("Playerok rejects repeating pagination and missing account details rather t
         requestData: async () => ({
           data: {
             items: {
-              edges: [{ node: { ...item("one"), attributes: null } }],
+              edges: [{ node: { ...item("one"), price: null } }],
               pageInfo: { hasNextPage: false },
             },
           },
@@ -144,6 +145,30 @@ test("Playerok rejects repeating pagination and missing account details rather t
       }),
     /неполные данные/,
   );
+});
+
+test("Playerok accounts with no parameters remain unknown and do not abort the whole catalog", async () => {
+  const result = await fetchPlayerokCategory({
+    requestData: async () => ({
+      data: {
+        items: {
+          edges: [
+            {
+              node: {
+                ...item("empty"),
+                name: "Dota account",
+                attributes: null,
+              },
+            },
+          ],
+          pageInfo: { hasNextPage: false },
+        },
+      },
+    }),
+  });
+  assert.equal(result.offers.length, 1);
+  assert.equal(result.offers[0].attributes.ranked_access, "unknown");
+  assert.equal(result.offers[0].attributes.solommr, undefined);
 });
 
 test("PlayerAuctions original offer URLs, USD, explicit ranked access and ranges filter consistently", async () => {
