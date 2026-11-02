@@ -132,3 +132,16 @@ test("missing API keys fail before network requests; credentials never appear in
     /все страницы/,
   );
 });
+
+test("PlayerAuctions plus between labelled features is not mistaken for a minimum MMR", () => {
+  const a = playerauctionsAccountAttributes(
+    "6092 MMR+IMMORTAL (Expired)+10999 BEHAVIOR+245 Matches - Ranked Ready Smurf",
+  );
+  assert.equal(a.solommr, "6092");
+  assert.equal(a.decency, "10999");
+  assert.equal(a.games, "245");
+  assert.equal(a.ranked_access, "open");
+  const bound = playerauctionsAccountAttributes("6000+ MMR Ranked Ready");
+  assert.equal(bound.solommr, undefined);
+  assert.equal(bound.solommr_min, "6000");
+});

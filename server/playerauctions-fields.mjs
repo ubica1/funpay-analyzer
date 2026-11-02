@@ -1,4 +1,12 @@
 import { externalAttributes } from "./external-fields.mjs";
+export function normalizePlayerauctionsTitle(title) {
+  // Sellers join labelled fields using '+': '6092 MMR+Immortal' is an
+  // exact MMR followed by another feature, unlike '6092+ MMR'.
+  return title.replace(
+    /(\d\s*(?:MMR|behavior|behaviour|matches|hours))\s*\+(?=\s*[a-z\d])/gi,
+    "$1 | ",
+  );
+}
 export function playerauctionsDescriptionProperties(evidence = "") {
   const result = [];
   for (const [name, value] of [
@@ -23,7 +31,10 @@ export function playerauctionsAccountAttributes(title, evidence = "", instant) {
   const props = playerauctionsDescriptionProperties(evidence);
   const attributes = {
     type1: "продажа",
-    ...externalAttributes(title + (evidence ? "\n" + evidence : ""), props),
+    ...externalAttributes(
+      normalizePlayerauctionsTitle(title) + (evidence ? "\n" + evidence : ""),
+      props,
+    ),
     platform: "playerauctions",
     currency: "USD",
   };

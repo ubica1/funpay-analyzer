@@ -1,3 +1,4 @@
+import { normalizePlayerauctionsTitle } from "./playerauctions-fields.mjs";
 import { fetchPlayerauctionsAccounts } from "./playerauctions-api.mjs";
 import { fetchPlayerokCategory } from "./playerok-collector.mjs";
 import { g2gRankProperties } from "./g2g-fields.mjs";
@@ -91,7 +92,12 @@ export function parseExternalOffers(html, platformId) {
       online: !!online,
       attributes: {
         type1: "продажа",
-        ...externalAttributes(title, properties),
+        ...externalAttributes(
+          p.id === "playerauctions"
+            ? normalizePlayerauctionsTitle(title)
+            : title,
+          properties,
+        ),
         ...(instant ? { auto: "1" } : {}),
         ...(typeof online === "boolean" ? { online_known: "1" } : {}),
         currency: p.currency,
