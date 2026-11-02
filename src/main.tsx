@@ -1771,7 +1771,7 @@ function App() {
         <p>Выберите площадку или общий рынок</p>
         {[
           { id: "ru", name: "Общий рынок РФ", detail: "4 площадки · ₽" },
-          { id: "foreign", name: "Остальной рынок", detail: "3 площадки · $" },
+          { id: "foreign", name: "Остальной рынок", detail: "4 площадки · $" },
         ].map((m) => (
           <button
             key={m.id}
