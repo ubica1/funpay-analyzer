@@ -50,6 +50,7 @@ const ready = {
   ggsel: 'a[href*="/catalog/product/"]',
   plati: "a[product_id]",
   z2u: ".productCardStyle-2",
+  playerauctions: 'a[href*="/dota-2-account/"][href*="a!"]',
 };
 export async function renderCategory(platformId) {
   const p = platforms.find((p) => p.id === platformId && p.id !== "funpay");

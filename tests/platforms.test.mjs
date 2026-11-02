@@ -231,7 +231,7 @@ test("existing FunPay database is migrated without dropping categories, snapshot
       "funpay",
     );
     assert.equal(db.prepare("SELECT COUNT(*) n FROM snapshots").get().n, 1);
-    assert.equal(db.prepare("SELECT COUNT(*) n FROM categories").get().n, 14);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM categories").get().n, 15);
   } finally {
     db.close();
     rmSync(dir, { recursive: true, force: true });

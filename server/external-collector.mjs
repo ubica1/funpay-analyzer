@@ -1,3 +1,4 @@
+import { fetchPlayerokCategory } from "./playerok-collector.mjs";
 import { g2gRankProperties } from "./g2g-fields.mjs";
 import { renderCategory } from "./browser-collector.mjs";
 import { fetchListing } from "./http.mjs";
@@ -195,6 +196,44 @@ export function parseExternalOffers(html, platformId) {
         reviews: Number(reviews) || 0,
       });
     });
+  if (p.id === "playerauctions")
+    $('a[href*="/dota-2-account/"]').each((i, el) => {
+      const link = $(el),
+        href = link.attr("href");
+      if (!/\/dota-2-account\/\d+a[!%]/i.test(href ?? "")) return;
+      const title = link.attr("title") || link.text().trim();
+      if (!title || /^(buy now|view|buy)$/i.test(title)) return;
+      let card = link.parent();
+      for (let depth = 0; depth < 7; depth++, card = card.parent()) {
+        const urls = new Set(
+          card
+            .find('a[href*="/dota-2-account/"]')
+            .map((i, a) => $(a).attr("href"))
+            .get()
+            .filter((h) => /\/\d+a[!%]/i.test(h)),
+        );
+        if (urls.size > 1 || !card.length || card.is("body,html")) break;
+        const priceText = card
+          .find('[itemprop="price"], .offer-price, .price')
+          .first();
+        const price =
+          priceText.attr("content") ||
+          priceText.text() ||
+          card.text().match(/\$\s*([\d,.]+)/)?.[1];
+        if (!price || !/\$|USD/i.test(card.text())) continue;
+        const seller = card.find('a[href*="/store/"]').first();
+        add({
+          url: href,
+          title,
+          price: amount(price),
+          currency: "USD",
+          seller: seller.text().trim(),
+          sellerId: seller.attr("href"),
+          instant: /instant/i.test(card.text()),
+        });
+        break;
+      }
+    });
   if (p.id === "eldorado")
     $('a[href*="/oa/"]').each((i, el) => {
       const card = $(el),
@@ -263,11 +302,16 @@ async function fetchExternalHtml(category) {
 
 export async function fetchExternalCategory(
   category,
-  { loadHtml = fetchExternalHtml, render = renderCategory } = {},
+  {
+    loadHtml = fetchExternalHtml,
+    render = renderCategory,
+    playerok = fetchPlayerokCategory,
+  } = {},
 ) {
   const p = platforms.find((p) => p.id === category.platform);
   if (!p || category.url !== p.url)
     throw new Error("Неизвестный адрес каталога");
+  if (p.id === "playerok") return playerok();
   if (p.browser) return parseExternalOffers(await render(p.id), p.id);
   try {
     return parseExternalOffers(await loadHtml(category), p.id);

@@ -15,7 +15,6 @@ export const platforms = [
   },
   {
     id: "playerok",
-    browser: true,
     name: "Playerok",
     region: "ru",
     currency: "RUB",
@@ -42,6 +41,13 @@ export const platforms = [
     region: "foreign",
     currency: "USD",
     url: "https://www.g2g.com/categories/dota-2-accounts-for-sale",
+  },
+  {
+    id: "playerauctions",
+    name: "PlayerAuctions",
+    region: "foreign",
+    currency: "USD",
+    url: "https://www.playerauctions.com/dota-2-account/immortal/",
   },
   {
     id: "z2u",

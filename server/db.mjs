@@ -34,9 +34,9 @@ export function createDatabase(path = ":memory:") {
       "ALTER TABLE categories ADD COLUMN platform TEXT NOT NULL DEFAULT 'funpay'; ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'accounts'; UPDATE categories SET kind=id;",
     );
   }
-  db.exec(`DELETE FROM snapshots WHERE category_id IN (SELECT id FROM categories WHERE platform IN ('playerauctions','epicnpc'));
-    DELETE FROM runs WHERE category_id IN (SELECT id FROM categories WHERE platform IN ('playerauctions','epicnpc'));
-    DELETE FROM categories WHERE platform IN ('playerauctions','epicnpc');`);
+  db.exec(`DELETE FROM snapshots WHERE category_id IN (SELECT id FROM categories WHERE platform='epicnpc');
+    DELETE FROM runs WHERE category_id IN (SELECT id FROM categories WHERE platform='epicnpc');
+    DELETE FROM categories WHERE platform='epicnpc';`);
   const put = db.prepare(
     "INSERT OR IGNORE INTO categories(id,name,url,enabled,color) VALUES(?,?,?,?,?)",
   );
