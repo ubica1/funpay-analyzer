@@ -306,12 +306,13 @@ export async function fetchExternalCategory(
     loadHtml = fetchExternalHtml,
     render = renderCategory,
     playerok = fetchPlayerokCategory,
+    onProgress,
   } = {},
 ) {
   const p = platforms.find((p) => p.id === category.platform);
   if (!p || category.url !== p.url)
     throw new Error("Неизвестный адрес каталога");
-  if (p.id === "playerok") return playerok();
+  if (p.id === "playerok") return playerok({ onProgress });
   if (p.browser) return parseExternalOffers(await render(p.id), p.id);
   try {
     return parseExternalOffers(await loadHtml(category), p.id);
