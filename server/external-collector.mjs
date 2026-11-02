@@ -1,3 +1,4 @@
+import { fetchPlayerauctionsAccounts } from "./playerauctions-api.mjs";
 import { fetchPlayerokCategory } from "./playerok-collector.mjs";
 import { g2gRankProperties } from "./g2g-fields.mjs";
 import { renderCategory } from "./browser-collector.mjs";
@@ -69,7 +70,17 @@ export function parseExternalOffers(html, platformId) {
     }
     // Plati's game page also contains skins and subscriptions.
     if (p.id === "plati" && !/аккаунт|account|\bmmr\b|ммр/i.test(title)) return;
-    const id = `${p.id}:${link.pathname.replace(/\/$/, "")}${link.search}`;
+    const paId =
+      p.id === "playerauctions"
+        ? link.pathname.match(/^\/dota-2-account\/(\d+)a!/)?.[1]
+        : null;
+    if (p.id === "playerauctions" && !paId) {
+      skipped++;
+      return;
+    }
+    const id = paId
+      ? `playerauctions:${paId}`
+      : `${p.id}:${link.pathname.replace(/\/$/, "")}${link.search}`;
     offers.set(id, {
       id,
       title: title.trim(),
@@ -229,7 +240,19 @@ export function parseExternalOffers(html, platformId) {
           currency: "USD",
           seller: seller.text().trim(),
           sellerId: seller.attr("href"),
-          instant: /instant/i.test(card.text()),
+          reviews:
+            Number(
+              card
+                .find(".offer-rating")
+                .first()
+                .closest("li")
+                .text()
+                .match(/\(([\d,]+)\)/)?.[1]
+                ?.replaceAll(",", ""),
+            ) || 0,
+          instant: card.find(".OLP-delivery-text").length
+            ? /^\s*Instant\s*$/i.test(card.find(".OLP-delivery-text").text())
+            : /instant/i.test(card.text()),
         });
         break;
       }
@@ -307,12 +330,19 @@ export async function fetchExternalCategory(
     render = renderCategory,
     playerok = fetchPlayerokCategory,
     onProgress,
+    knownUrls,
   } = {},
 ) {
   const p = platforms.find((p) => p.id === category.platform);
   if (!p || category.url !== p.url)
     throw new Error("Неизвестный адрес каталога");
   if (p.id === "playerok") return playerok({ onProgress });
+  if (
+    p.id === "playerauctions" &&
+    (process.env.PLAYERAUCTIONS_MODE === "api" ||
+      process.env.PLAYERAUCTIONS_API_KEY)
+  )
+    return fetchPlayerauctionsAccounts({ onProgress, knownUrls });
   if (p.browser) return parseExternalOffers(await render(p.id), p.id);
   try {
     return parseExternalOffers(await loadHtml(category), p.id);
