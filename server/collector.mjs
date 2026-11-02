@@ -279,12 +279,19 @@ export function createCollector(
         [...groups.values()].map(async (group) => {
           for (let i = 0; i < group.length && !stopped; i++) {
             const c = group[i];
-            progress.current.push(c.name);
+            let currentName = c.name;
+            progress.current.push(currentName);
             try {
               const result =
                 c.platform === "funpay"
                   ? await fetchPublic(c.url)
-                  : await fetchExternal(c);
+                  : await fetchExternal(c, {
+                      onProgress: ({ completed, total }) => {
+                        const index = progress.current.indexOf(currentName);
+                        currentName = `${c.name}: параметры ${completed}/${total}`;
+                        if (index >= 0) progress.current[index] = currentName;
+                      },
+                    });
               saveSnapshot(db, c.id, result.offers, result);
               lastCollection.results.push({
                 categoryId: c.id,
@@ -312,7 +319,7 @@ export function createCollector(
             } finally {
               progress.completed++;
               progress.current = progress.current.filter(
-                (name) => name !== c.name,
+                (name) => name !== currentName,
               );
             }
             if (i < group.length - 1 && !stopped && pauseMs)

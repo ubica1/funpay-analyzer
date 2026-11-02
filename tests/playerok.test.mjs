@@ -17,7 +17,7 @@ const item = (id, attrs = {}) => ({
   attributes: attrs,
   game,
   category,
-  seller: { id: "seller", username: "Seller", testimonialCounter: 33 },
+  user: { id: "seller", username: "Seller", testimonialCounter: 33 },
 });
 const today = new Date(Date.now() + 10800000).toISOString().slice(0, 10);
 const q = (extra) =>
@@ -38,31 +38,31 @@ test("Playerok follows pagination and uses current structured attributes for fil
       "calibration-completed": false,
     }),
   ];
-  let pages = 0,
-    details = 0;
+  let pages = 0;
   const r = await fetchPlayerokCategory({
     requestData: async (url, body) => {
-      if (url.includes("/graphql")) {
-        details++;
-        assert.equal(body.operationName, "item");
-        let d = lots.find((d) => d.id === body.variables.id);
-        return { data: { item: { ...d, price: 25 } } };
-      }
+      assert.equal(url, "https://playerok.com/graphql");
+      assert.equal(body.operationName, "items");
+      assert.equal(body.variables.pagination.first, 24);
       pages++;
-      if (pages === 1) {
-        assert.equal(body.page.cursor, undefined);
-        return {
-          items: lots.slice(0, 2),
-          hasNextPage: true,
-          endCursor: "next",
-        };
-      }
-      assert.equal(body.page.cursor, "next");
-      return { items: lots.slice(2), hasNextPage: false };
+      assert.equal(
+        body.variables.pagination.after,
+        pages === 1 ? undefined : "next",
+      );
+      return {
+        data: {
+          items: {
+            edges: (pages === 1 ? lots.slice(0, 2) : lots.slice(2)).map(
+              (d) => ({ node: { ...d, price: 25 } }),
+            ),
+            pageInfo: { hasNextPage: pages === 1, endCursor: "next" },
+            totalCount: 4,
+          },
+        },
+      };
     },
   });
   assert.equal(pages, 2);
-  assert.equal(details, 4);
   assert.equal(r.offers.length, 4);
   assert.equal(r.offers.find((o) => o.url.endsWith("ad-one")).price, 25);
   assert.equal(r.offers[0].seller, "Seller");
@@ -120,9 +120,12 @@ test("Playerok rejects repeating pagination and missing account details rather t
     () =>
       fetchPlayerokCategory({
         requestData: async () => ({
-          items: [item("one")],
-          hasNextPage: true,
-          endCursor: "same",
+          data: {
+            items: {
+              edges: [{ node: item("one") }],
+              pageInfo: { hasNextPage: true, endCursor: "same" },
+            },
+          },
         }),
       }),
     /следующую страницу/,
@@ -130,10 +133,14 @@ test("Playerok rejects repeating pagination and missing account details rather t
   await assert.rejects(
     () =>
       fetchPlayerokCategory({
-        requestData: async (url) =>
-          url.includes("/graphql")
-            ? { data: {} }
-            : { items: [item("one")], hasNextPage: false },
+        requestData: async () => ({
+          data: {
+            items: {
+              edges: [{ node: { ...item("one"), attributes: null } }],
+              pageInfo: { hasNextPage: false },
+            },
+          },
+        }),
       }),
     /неполные данные/,
   );
@@ -194,4 +201,52 @@ test("PlayerAuctions category cards keep individual price and seller without mix
   assert.equal(offers[0].attributes.ranked_access, "open");
   assert.equal(offers[1].attributes.ranked_access, "closed");
   assert.equal(offers[0].attributes.auto, "1");
+});
+
+test("Playerok collection progress reaches the interface and clears after completion", async () => {
+  const { createCollector } = await import("../server/collector.mjs");
+  const db = createDatabase();
+  let release, started;
+  const gate = new Promise((r) => (release = r)),
+    signal = new Promise((r) => (started = r));
+  const collector = createCollector(db, {
+    fetchExternal: async (c, { onProgress }) => {
+      onProgress({ completed: 50, total: 1300 });
+      started();
+      await gate;
+      return {
+        offers: [
+          {
+            id: "playerok:one",
+            title: "Account",
+            price: 10,
+            seller: "Seller",
+            sellerId: "playerok:s",
+            reviews: 0,
+            online: false,
+            attributes: {},
+            url: "https://playerok.com/products/one",
+          },
+        ],
+      };
+    },
+  });
+  try {
+    const pending = collector.collect({
+      market: "playerok",
+      category: "accounts",
+    });
+    await signal;
+    assert.match(collector.status().current[0], /50\/1300/);
+    release();
+    await pending;
+    assert.deepEqual(collector.status().current, []);
+    assert.equal(
+      collector.status().lastCollection.results[0].status,
+      "success",
+    );
+  } finally {
+    collector.stop();
+    db.close();
+  }
 });
