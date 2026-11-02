@@ -47,7 +47,7 @@ async function request(url, body) {
     return data;
   }
 }
-export function playerokAttributes(title, values = {}, instant = false) {
+export function playerokAttributes(title, values = {}, instant) {
   const fields = {
     mmr: "MMR",
     "conduct-summary": "behavior",
@@ -78,7 +78,7 @@ export function playerokAttributes(title, values = {}, instant = false) {
     result.type = "под калибровку (tbd)";
   if (props.some((p) => p.name !== "доступен рейтинг"))
     result.parameter_source = "Параметры объявления Playerok";
-  if (instant) result.auto = "1";
+  if (typeof instant === "boolean") result.auto = instant ? "1" : "0";
   return result;
 }
 const query = `query items($filter:ItemFilter,$pagination:Pagination){
@@ -132,17 +132,17 @@ export async function fetchPlayerokCategory({
       }
       if (
         !d.id ||
-        typeof d.attributes !== "object" ||
-        d.attributes === null ||
-        !/^[a-z0-9-]+$/i.test(d.slug) ||
+        (d.attributes != null && typeof d.attributes !== "object") ||
+        typeof d.slug !== "string" ||
+        !/^[^/?#\s]+$/u.test(d.slug) ||
         !d.name ||
         !Number.isFinite(d.price) ||
         d.price < 0
       )
         throw new Error(
-          "Playerok: неполные данные объявления. Снимок не сохранён.",
+          `Playerok: неполные данные объявления (${d.id ?? "без ID"}). Снимок не сохранён.`,
         );
-      const url = `https://playerok.com/products/${d.slug}`;
+      const url = `https://playerok.com/products/${encodeURIComponent(d.slug)}`;
       const id = `playerok:/products/${d.slug}`;
       offers.set(id, {
         id,
@@ -154,8 +154,8 @@ export async function fetchPlayerokCategory({
         online: false,
         attributes: playerokAttributes(
           d.name,
-          d.attributes,
-          d.isAutomated === true,
+          d.attributes ?? {},
+          d.isAutomated,
         ),
         url,
       });
