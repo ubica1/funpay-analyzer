@@ -170,9 +170,23 @@ export function createApp({
             message: "Неверный адрес объявления",
           },
         ]);
+      const paId =
+        platform.id === "playerauctions"
+          ? url.pathname.match(/^\/dota-2-account\/(\d+)a!/)?.[1]
+          : null;
+      if (platform.id === "playerauctions" && !paId)
+        throw new z.ZodError([
+          {
+            code: "custom",
+            path: ["offers"],
+            message: "Нужна ссылка на аккаунт Dota 2",
+          },
+        ]);
       return {
         ...o,
-        id: `${platform.id}:${url.pathname.replace(/\/$/, "")}${url.search}`,
+        id: paId
+          ? `playerauctions:${paId}`
+          : `${platform.id}:${url.pathname.replace(/\/$/, "")}${url.search}`,
         sellerId: `${platform.id}:${o.sellerId}`,
         attributes: {
           ...o.attributes,

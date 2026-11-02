@@ -286,6 +286,21 @@ export function createCollector(
                 c.platform === "funpay"
                   ? await fetchPublic(c.url)
                   : await fetchExternal(c, {
+                      ...(c.platform === "playerauctions"
+                        ? {
+                            knownUrls: new Map(
+                              db
+                                .prepare(
+                                  "SELECT offer_id,url FROM observations WHERE snapshot_id=(SELECT id FROM snapshots WHERE category_id=? ORDER BY collected_at DESC LIMIT 1)",
+                                )
+                                .all(c.id)
+                                .map((o) => [
+                                  Number(o.offer_id.split(":").at(-1)),
+                                  o.url,
+                                ]),
+                            ),
+                          }
+                        : {}),
                       onProgress: ({ completed, total }) => {
                         const index = progress.current.indexOf(currentName);
                         currentName = `${c.name}: параметры ${completed}/${total}`;
