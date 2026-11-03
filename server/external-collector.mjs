@@ -1,5 +1,5 @@
 import { normalizePlayerauctionsTitle } from "./playerauctions-fields.mjs";
-import { fetchPlayerauctionsAccounts } from "./playerauctions-api.mjs";
+import { fetchPlayerauctionsBrowser } from "./playerauctions-browser.mjs";
 import { fetchPlayerokCategory } from "./playerok-collector.mjs";
 import { g2gRankProperties } from "./g2g-fields.mjs";
 import { renderCategory } from "./browser-collector.mjs";
@@ -336,19 +336,18 @@ export async function fetchExternalCategory(
     render = renderCategory,
     playerok = fetchPlayerokCategory,
     onProgress,
-    knownUrls,
+    playerauctions = fetchPlayerauctionsBrowser,
   } = {},
 ) {
   const p = platforms.find((p) => p.id === category.platform);
   if (!p || category.url !== p.url)
     throw new Error("Неизвестный адрес каталога");
   if (p.id === "playerok") return playerok({ onProgress });
-  if (
-    p.id === "playerauctions" &&
-    (process.env.PLAYERAUCTIONS_MODE === "api" ||
-      process.env.PLAYERAUCTIONS_API_KEY)
-  )
-    return fetchPlayerauctionsAccounts({ onProgress, knownUrls });
+  if (p.id === "playerauctions")
+    return playerauctions({
+      onProgress,
+      parsePage: (html) => parseExternalOffers(html, "playerauctions"),
+    });
   if (p.browser) return parseExternalOffers(await render(p.id), p.id);
   try {
     return parseExternalOffers(await loadHtml(category), p.id);

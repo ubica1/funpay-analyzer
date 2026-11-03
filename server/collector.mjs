@@ -286,40 +286,29 @@ export function createCollector(
                 c.platform === "funpay"
                   ? await fetchPublic(c.url)
                   : await fetchExternal(c, {
-                      ...(c.platform === "playerauctions"
-                        ? {
-                            knownUrls: new Map(
-                              db
-                                .prepare(
-                                  "SELECT offer_id,url FROM observations WHERE snapshot_id=(SELECT id FROM snapshots WHERE category_id=? ORDER BY collected_at DESC LIMIT 1)",
-                                )
-                                .all(c.id)
-                                .map((o) => [
-                                  Number(o.offer_id.split(":").at(-1)),
-                                  o.url,
-                                ]),
-                            ),
-                          }
-                        : {}),
-                      onProgress: ({ completed, total }) => {
+                      onProgress: ({ completed, total, stage }) => {
                         const index = progress.current.indexOf(currentName);
-                        currentName = `${c.name}: параметры ${completed}/${total}`;
+                        currentName = `${c.name}: ${stage === "catalog" ? "объявления" : "параметры"} ${completed}/${total}`;
                         if (index >= 0) progress.current[index] = currentName;
                       },
                     });
               saveSnapshot(db, c.id, result.offers, result);
+              const message = result.detailsFailed
+                ? `Все объявления сохранены; описания ${result.detailsFailed} лотов не загрузились, их дополнительные параметры могут быть неизвестны`
+                : result.advertised > result.offers.length
+                  ? "Снимок сохранён; выборка неполная"
+                  : "Снимок сохранён";
               lastCollection.results.push({
                 categoryId: c.id,
                 name: c.name,
                 status: "success",
                 count: result.offers.length,
+                ...(result.detailsFailed ? { message } : {}),
               });
               log(
                 c.id,
-                "success",
-                result.advertised > result.offers.length
-                  ? "Снимок сохранён; выборка неполная"
-                  : "Снимок сохранён",
+                result.detailsFailed ? "warning" : "success",
+                message,
                 result.offers.length,
               );
             } catch (e) {
