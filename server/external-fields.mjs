@@ -105,7 +105,7 @@ export function externalAttributes(title = "", properties = []) {
   }
   // MMR and medal names do not establish access to ranked matches.
   const closed =
-    /(?:not|non)[ -]?(?:ranked|rank)[ -]?ready|rank(?:ed)?[ -]?(?:locked|not ready)|без доступа к рейтинг|закрыт[а-я]*\s+рейтинг[а-я]*|рейтинг[а-я]*\s+закрыт|не\s*открыт[а-я]*\s+рейтинг|до (?:открытия )?рейтинг/i.test(
+    /(?:not|non)[ -]?(?:ranked|rank)[ -]?ready|rank(?:ed)?[ -]?(?:locked|closed|disabled|unavailable|not ready)|без доступа к рейтинг|закрыт[а-я]*\s+рейтинг[а-я]*|рейтинг[а-я]*\s+закрыт|не\s*открыт[а-я]*\s+рейтинг|до (?:открытия )?рейтинг/i.test(
       text,
     );
   const open =
