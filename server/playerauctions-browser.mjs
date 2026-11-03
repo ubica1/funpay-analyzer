@@ -96,6 +96,10 @@ export async function collectPlayerauctionsPages({
   onProgress = () => {},
   readDescription,
   maxPages = 500,
+  onCatalogComplete = async () => {},
+  maxDetailMs = 300000,
+  maxConsecutiveDetailFailures = 3,
+  now = Date.now,
 }) {
   const offers = new Map(),
     visited = new Set();
@@ -137,40 +141,47 @@ export async function collectPlayerauctionsPages({
     throw new Error(
       `PlayerAuctions: собрано ${offers.size} из ${expected}. Неполный снимок не сохранён.`,
     );
+  await onCatalogComplete();
   let detailsFailed = 0;
   if (readDescription) {
     const entries = [...offers.values()];
-    let index = 0,
-      completed = 0;
-    await Promise.all(
-      Array.from({ length: 2 }, async () => {
-        while (index < entries.length) {
-          const offer = entries[index++];
-          try {
-            const html = await readDescription(offer.url);
-            if (!load(html)("#offer-description-section").length)
-              throw new Error("Описание объявления не загрузилось");
-            const evidence = playerauctionsDescriptionEvidence(html);
-            offer.attributes = {
-              ...offer.attributes,
-              ...playerauctionsAccountAttributes(
-                offer.title,
-                evidence,
-                offer.attributes.auto === "1",
-              ),
-            };
-          } catch {
-            detailsFailed++;
-          } finally {
-            onProgress({
-              stage: "details",
-              completed: ++completed,
-              total: entries.length,
-            });
-          }
-        }
-      }),
-    );
+    const started = now();
+    let completed = 0,
+      consecutiveFailures = 0;
+    for (const offer of entries) {
+      if (
+        now() - started >= maxDetailMs ||
+        consecutiveFailures >= maxConsecutiveDetailFailures
+      )
+        break;
+      try {
+        const html = await readDescription(offer.url);
+        if (!load(html)("#offer-description-section").length)
+          throw new Error("Описание объявления не загрузилось");
+        const evidence = playerauctionsDescriptionEvidence(html);
+        offer.attributes = {
+          ...offer.attributes,
+          ...playerauctionsAccountAttributes(
+            offer.title,
+            evidence,
+            offer.attributes.auto === "1",
+          ),
+        };
+        consecutiveFailures = 0;
+      } catch {
+        detailsFailed++;
+        consecutiveFailures++;
+      } finally {
+        onProgress({
+          stage: "details",
+          completed: ++completed,
+          total: entries.length,
+        });
+      }
+    }
+    // The catalog is already complete. Unavailable optional descriptions must
+    // not prevent fresh listings from being saved or consume a small VPS all day.
+    detailsFailed += entries.length - completed;
   }
   return {
     offers: [...offers.values()],
@@ -321,21 +332,7 @@ export async function fetchPlayerauctionsBrowser({
         : r.continue(),
     );
     const main = context.pages()[0] || (await context.newPage());
-    const tabs = [await context.newPage(), await context.newPage()];
-    const available = [...tabs],
-      waiters = [];
-    const readDescription = async (url) => {
-      const p =
-        available.pop() ||
-        (await new Promise((resolve) => waiters.push(resolve)));
-      try {
-        return await readPlayerauctionsPage(p, url);
-      } finally {
-        const next = waiters.shift();
-        if (next) next(p);
-        else available.push(p);
-      }
-    };
+    let detailPage;
     return await collectPlayerauctionsPages({
       loadPage: (url) =>
         readPlayerauctionsPage(main, url, {
@@ -343,7 +340,11 @@ export async function fetchPlayerauctionsBrowser({
         }),
       parsePage,
       onProgress,
-      readDescription,
+      onCatalogComplete: async () => {
+        detailPage = await context.newPage();
+        await main.close();
+      },
+      readDescription: (url) => readPlayerauctionsPage(detailPage, url),
     });
   } finally {
     await context?.close().catch(() => {});

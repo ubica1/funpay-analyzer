@@ -294,7 +294,7 @@ export function createCollector(
                     });
               saveSnapshot(db, c.id, result.offers, result);
               const message = result.detailsFailed
-                ? `Все объявления сохранены; описания ${result.detailsFailed} лотов не загрузились, их дополнительные параметры могут быть неизвестны`
+                ? `Все объявления сохранены; параметры ${result.detailsFailed} лотов не уточнены по описаниям. Неизвестные значения исключаются фильтрами`
                 : result.advertised > result.offers.length
                   ? "Снимок сохранён; выборка неполная"
                   : "Снимок сохранён";
