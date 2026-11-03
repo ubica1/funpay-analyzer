@@ -162,3 +162,49 @@ test("catalog reads the hydrated DOM, waiting for pagination absent from the HTT
   );
   assert.ok(waiting.some((s) => s.includes("pagination")));
 });
+
+test("subsequent pages use the site's pagination button instead of typing a query URL", async () => {
+  let clicked = false;
+  const page = {
+    goto: async () => {
+      throw new Error(
+        "Direct pagination requests are not browser link navigation",
+      );
+    },
+    waitForNavigation: async () => ({ status: () => 200 }),
+    waitForLoadState: async () => {},
+    locator: (selector) => ({
+      first: () => ({
+        click: async () => {
+          assert.match(selector, /Page Number 2/);
+          clicked = true;
+        },
+        waitFor: async () => {},
+      }),
+    }),
+    content: async () => html([101], 2, 2),
+  };
+  await readPlayerauctionsPage(page, playerauctionsCatalog + "?PageIndex=2", {
+    followNext: true,
+  });
+  assert.equal(clicked, true);
+  const next = playerauctionsPageInfo(
+    html([100], 2, 2).replace(
+      "?PageIndex=2",
+      "?Serverid=0&amp;Isdelivery=0&amp;PageIndex=2",
+    ),
+    playerauctionsCatalog,
+  );
+  assert.equal(new URL(next.next).searchParams.get("PageIndex"), "2");
+  assert.throws(
+    () =>
+      playerauctionsPageInfo(
+        html([100], 2, 2).replace(
+          "?PageIndex=2",
+          "?Serverid=123&amp;PageIndex=2",
+        ),
+        playerauctionsCatalog,
+      ),
+    /неверный адрес/,
+  );
+});

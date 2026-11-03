@@ -31,7 +31,11 @@ export function playerauctionsPageInfo(html, url) {
     if (
       candidate.origin !== new URL(playerauctionsCatalog).origin ||
       candidate.pathname !== "/dota-2-account/" ||
-      [...candidate.searchParams.keys()].some((k) => k !== "PageIndex") ||
+      [...candidate.searchParams].some(
+        ([key, value]) =>
+          key !== "PageIndex" &&
+          !(["Serverid", "Isdelivery"].includes(key) && value === "0"),
+      ) ||
       !Number.isSafeInteger(index)
     )
       throw new Error("PlayerAuctions: неверный адрес следующей страницы.");
@@ -176,11 +180,24 @@ export async function collectPlayerauctionsPages({
     detailsFailed,
   };
 }
-export async function readPlayerauctionsPage(page, url) {
-  const response = await page.goto(url, {
-    waitUntil: "commit",
-    timeout: 20000,
-  });
+export async function readPlayerauctionsPage(
+  page,
+  url,
+  { followNext = false } = {},
+) {
+  let response;
+  if (followNext) {
+    const index = Number(new URL(url).searchParams.get("PageIndex"));
+    const link = page
+      .locator(`.pagination a[aria-label="Page Number ${index}"]`)
+      .first();
+    [response] = await Promise.all([
+      page.waitForNavigation({ waitUntil: "commit", timeout: 20000 }),
+      link.click({ timeout: 10000 }),
+    ]);
+  } else {
+    response = await page.goto(url, { waitUntil: "commit", timeout: 20000 });
+  }
   if (!response) throw new Error("PlayerAuctions: браузер не получил ответ.");
   if (response.status() >= 400 && ![403, 429].includes(response.status()))
     throw new Error(`PlayerAuctions: HTTP ${response.status()}.`);
@@ -290,9 +307,7 @@ export async function fetchPlayerauctionsBrowser({
       args: ["--disable-http2", "--disable-quic"],
     });
     await context.route("**/*", (r) =>
-      ["image", "media", "font", "stylesheet"].includes(
-        r.request().resourceType(),
-      )
+      ["image", "media", "font"].includes(r.request().resourceType())
         ? r.abort()
         : r.continue(),
     );
@@ -313,7 +328,10 @@ export async function fetchPlayerauctionsBrowser({
       }
     };
     return await collectPlayerauctionsPages({
-      loadPage: (url) => readPlayerauctionsPage(main, url),
+      loadPage: (url) =>
+        readPlayerauctionsPage(main, url, {
+          followNext: url !== playerauctionsCatalog,
+        }),
       parsePage,
       onProgress,
       readDescription,
