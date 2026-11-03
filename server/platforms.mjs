@@ -47,7 +47,7 @@ export const platforms = [
     name: "PlayerAuctions",
     region: "foreign",
     currency: "USD",
-    url: "https://www.playerauctions.com/dota-2-account/immortal/",
+    url: "https://www.playerauctions.com/dota-2-account/",
   },
   {
     id: "z2u",

@@ -55,6 +55,9 @@ export function createDatabase(path = ":memory:") {
       p.id,
       "accounts",
     );
+  db.prepare(
+    "UPDATE categories SET url=? WHERE id='playerauctions-accounts' AND platform='playerauctions'",
+  ).run(platforms.find((p) => p.id === "playerauctions").url);
   for (const [key, value] of Object.entries({
     intervalMinutes: 60,
     retentionDays: 30,
