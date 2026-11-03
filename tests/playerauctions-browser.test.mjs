@@ -129,6 +129,7 @@ test("Calibrated is explicit access; Uncalibrated and not calibrated stay unknow
   assert.equal(a("Calibrated 1970 MMR").ranked_access, "open");
   assert.equal(a("Uncalibrated 1970 MMR").ranked_access, "unknown");
   assert.equal(a("Not calibrated 1970 MMR").ranked_access, "unknown");
+  assert.equal(a("Non-calibrated 1970 MMR").ranked_access, "unknown");
   assert.equal(a("Calibrated 1970 MMR Ranked Locked").ranked_access, "closed");
 });
 
@@ -258,4 +259,20 @@ test("description time budget preserves collected prices, original URLs and expl
   assert.equal(result.offers[0].attributes.solommr, "5802");
   assert.equal(result.offers[1].price, 12.5);
   assert.match(result.offers[1].url, /101a!original-title/);
+});
+
+test("Calibrated listings are recognized from the catalog even when their description is unavailable", async () => {
+  const page = html([100, 101], 2, 1)
+    .replace("Ranked Ready 100 MMR", "Calibrated 1970 MMR")
+    .replace("Ranked Ready 101 MMR", "Uncalibrated 1970 MMR");
+  const result = await collectPlayerauctionsPages({
+    parsePage,
+    loadPage: async () => page,
+    readDescription: async () => {
+      throw new Error("Unavailable description");
+    },
+  });
+  assert.equal(result.offers[0].attributes.ranked_access, "open");
+  assert.equal(result.offers[0].attributes.solommr, "1970");
+  assert.equal(result.offers[1].attributes.ranked_access, "unknown");
 });
