@@ -187,10 +187,9 @@ export async function readPlayerauctionsPage(
 ) {
   let response;
   if (followNext) {
-    const index = Number(new URL(url).searchParams.get("PageIndex"));
-    const link = page
-      .locator(`.pagination a[aria-label="Page Number ${index}"]`)
-      .first();
+    // Numbered links reuse aria-labels when the visible page window shifts.
+    // The dedicated next-page control keeps the correct destination.
+    const link = page.locator('.pagination a[aria-label="Next Page"]').first();
     [response] = await Promise.all([
       page.waitForNavigation({ waitUntil: "commit", timeout: 20000 }),
       link.click({ timeout: 10000 }),
@@ -220,6 +219,16 @@ export async function readPlayerauctionsPage(
     );
   }
   if (catalog) {
+    const expectedPage = Number(
+      new URL(url).searchParams.get("PageIndex") || 1,
+    );
+    const actualPage = Number(
+      new URL(page.url()).searchParams.get("PageIndex") || 1,
+    );
+    if (actualPage !== expectedPage)
+      throw new Error(
+        `PlayerAuctions: вместо страницы ${expectedPage} открылась ${actualPage}. Неполный снимок не сохранён.`,
+      );
     const $ = load(await page.content());
     const total = Number(
       $(".offer-search-count")

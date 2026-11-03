@@ -141,6 +141,7 @@ test("catalog reads the hydrated DOM, waiting for pagination absent from the HTT
   );
   const after = html([100], 2, 2);
   const page = {
+    url: () => playerauctionsCatalog,
     goto: async () => ({ status: () => 200, text: async () => before }),
     waitForLoadState: async (state) => {
       assert.equal(state, "domcontentloaded");
@@ -166,6 +167,7 @@ test("catalog reads the hydrated DOM, waiting for pagination absent from the HTT
 test("subsequent pages use the site's pagination button instead of typing a query URL", async () => {
   let clicked = false;
   const page = {
+    url: () => playerauctionsCatalog + "?PageIndex=2",
     goto: async () => {
       throw new Error(
         "Direct pagination requests are not browser link navigation",
@@ -176,7 +178,7 @@ test("subsequent pages use the site's pagination button instead of typing a quer
     locator: (selector) => ({
       first: () => ({
         click: async () => {
-          assert.match(selector, /Page Number 2/);
+          assert.match(selector, /Next Page/);
           clicked = true;
         },
         waitFor: async () => {},
@@ -188,6 +190,14 @@ test("subsequent pages use the site's pagination button instead of typing a quer
     followNext: true,
   });
   assert.equal(clicked, true);
+  page.url = () => playerauctionsCatalog + "?PageIndex=6";
+  await assert.rejects(
+    () =>
+      readPlayerauctionsPage(page, playerauctionsCatalog + "?PageIndex=5", {
+        followNext: true,
+      }),
+    /вместо страницы 5 открылась 6/,
+  );
   const next = playerauctionsPageInfo(
     html([100], 2, 2).replace(
       "?PageIndex=2",
