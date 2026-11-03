@@ -20,6 +20,17 @@ test("current rank in description establishes access; expired medal and unknown 
   );
   assert.equal(
     playerauctionsAccountAttributes(
+      "Calibrated 3230 MMR RANKED UNAVAILABLE DUE TO 111 BEHAVIOR",
+    ).ranked_access,
+    "closed",
+  );
+  assert.equal(
+    playerauctionsAccountAttributes("RANKED READY | NO RANK/EXPIRED")
+      .ranked_access,
+    "open",
+  );
+  assert.equal(
+    playerauctionsAccountAttributes(
       "Immortal item collection",
       "RANK: Immortal (Expired)",
     ).ranked_access,
