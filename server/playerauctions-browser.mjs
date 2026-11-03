@@ -176,6 +176,49 @@ export async function collectPlayerauctionsPages({
     detailsFailed,
   };
 }
+export async function readPlayerauctionsPage(page, url) {
+  const response = await page.goto(url, {
+    waitUntil: "commit",
+    timeout: 20000,
+  });
+  if (!response) throw new Error("PlayerAuctions: браузер не получил ответ.");
+  if (response.status() >= 400 && ![403, 429].includes(response.status()))
+    throw new Error(`PlayerAuctions: HTTP ${response.status()}.`);
+  const catalog = new URL(url).pathname === "/dota-2-account/";
+  try {
+    // The server response has cards but no pagination. The site's own scripts
+    // create page links and description content after parsing the document.
+    await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
+    await page
+      .locator(catalog ? ".offer-item" : "#offer-description-section")
+      .first()
+      .waitFor({ state: "attached", timeout: 30000 });
+  } catch {
+    if (response.status() >= 400)
+      throw new Error(
+        "PlayerAuctions: требуется ручная проверка браузера. Полный снимок не сохранён.",
+      );
+    throw new Error(
+      "PlayerAuctions: страница не загрузилась полностью. Новый снимок не сохранён.",
+    );
+  }
+  if (catalog) {
+    const $ = load(await page.content());
+    const total = Number(
+      $(".offer-search-count")
+        .first()
+        .text()
+        .match(/([\d,\s]+)\s*Offers found/i)?.[1]
+        ?.replace(/\D/g, ""),
+    );
+    if (total > $(".offer-item").length)
+      await page
+        .locator('.pagination a[aria-label="Next Page"]')
+        .first()
+        .waitFor({ state: "attached", timeout: 10000 });
+  }
+  return page.content();
+}
 async function virtualDisplay() {
   const child = spawn(
     "Xvfb",
@@ -254,47 +297,6 @@ export async function fetchPlayerauctionsBrowser({
         : r.continue(),
     );
     const main = context.pages()[0] || (await context.newPage());
-    async function read(page, url) {
-      const response = await page.goto(url, {
-        waitUntil: "commit",
-        timeout: 20000,
-      });
-      if (!response)
-        throw new Error("PlayerAuctions: браузер не получил ответ.");
-      if (response.status() >= 400) {
-        // Let the ordinary page finish its browser check. No CAPTCHA clicking,
-        // fingerprint patches or fabricated clearance cookies are performed.
-        await page
-          .locator(".offer-item, #offer-description-section")
-          .first()
-          .waitFor({ state: "attached", timeout: 30000 })
-          .catch(() => {
-            throw new Error(
-              "PlayerAuctions: требуется ручная проверка браузера. Полный снимок не сохранён.",
-            );
-          });
-        return page.content();
-      }
-      let timer;
-      try {
-        return await Promise.race([
-          response.text(),
-          new Promise((_, reject) => {
-            timer = setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    "PlayerAuctions: передача страницы не завершилась. Полный снимок не сохранён.",
-                  ),
-                ),
-              30000,
-            );
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-    }
     const tabs = [await context.newPage(), await context.newPage()];
     const available = [...tabs],
       waiters = [];
@@ -303,7 +305,7 @@ export async function fetchPlayerauctionsBrowser({
         available.pop() ||
         (await new Promise((resolve) => waiters.push(resolve)));
       try {
-        return await read(p, url);
+        return await readPlayerauctionsPage(p, url);
       } finally {
         const next = waiters.shift();
         if (next) next(p);
@@ -311,7 +313,7 @@ export async function fetchPlayerauctionsBrowser({
       }
     };
     return await collectPlayerauctionsPages({
-      loadPage: (url) => read(main, url),
+      loadPage: (url) => readPlayerauctionsPage(main, url),
       parsePage,
       onProgress,
       readDescription,

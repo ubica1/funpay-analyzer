@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   collectPlayerauctionsPages,
+  readPlayerauctionsPage,
   playerauctionsPageInfo,
   playerauctionsDescriptionEvidence,
   playerauctionsCatalog,
@@ -129,4 +130,35 @@ test("Calibrated is explicit access; Uncalibrated and not calibrated stay unknow
   assert.equal(a("Uncalibrated 1970 MMR").ranked_access, "unknown");
   assert.equal(a("Not calibrated 1970 MMR").ranked_access, "unknown");
   assert.equal(a("Calibrated 1970 MMR Ranked Locked").ranked_access, "closed");
+});
+
+test("catalog reads the hydrated DOM, waiting for pagination absent from the HTTP response", async () => {
+  let ready = false;
+  const waiting = [];
+  const before = html([100], 2, 2).replace(
+    /<ul class="pagination">.*<\/ul>/,
+    "",
+  );
+  const after = html([100], 2, 2);
+  const page = {
+    goto: async () => ({ status: () => 200, text: async () => before }),
+    waitForLoadState: async (state) => {
+      assert.equal(state, "domcontentloaded");
+    },
+    locator: (selector) => ({
+      first: () => ({
+        waitFor: async () => {
+          waiting.push(selector);
+          if (selector.includes("pagination")) ready = true;
+        },
+      }),
+    }),
+    content: async () => (ready ? after : before),
+  };
+  const rendered = await readPlayerauctionsPage(page, playerauctionsCatalog);
+  assert.equal(
+    playerauctionsPageInfo(rendered, playerauctionsCatalog).next,
+    playerauctionsCatalog + "?PageIndex=2",
+  );
+  assert.ok(waiting.some((s) => s.includes("pagination")));
 });
