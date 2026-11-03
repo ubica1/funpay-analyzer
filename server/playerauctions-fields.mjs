@@ -27,11 +27,19 @@ export function playerauctionsDescriptionProperties(evidence = "") {
   if (ranks.length) result.push({ name: "Ranked access", value: true });
   return result;
 }
-export function playerauctionsAccountAttributes(title, evidence = "", instant) {
-  const props = playerauctionsDescriptionProperties(evidence);
+export function playerauctionsAccountAttributes(
+  title,
+  evidence = "",
+  instant,
+  properties = [],
+) {
+  const props = [
+    ...[properties].flat().filter(Boolean),
+    ...playerauctionsDescriptionProperties(evidence),
+  ];
   const calibrated =
     /\bcalibrated\b/i.test(title) &&
-    !/\b(?:not|never)\s+calibrated\b/i.test(title);
+    !/\b(?:not|never|non)[ -]+calibrated\b/i.test(title);
   if (calibrated) props.unshift({ name: "Ranked access", value: true });
   const attributes = {
     type1: "продажа",
@@ -47,7 +55,7 @@ export function playerauctionsAccountAttributes(title, evidence = "", instant) {
       evidence && /^RANK:/im.test(evidence)
         ? "Описание PlayerAuctions: текущий ранг"
         : "Заголовок PlayerAuctions: Calibrated";
-  if (props.some((p) => p.name !== "Ranked access"))
+  if (evidence && props.some((p) => p.name !== "Ranked access"))
     attributes.parameter_source = "Описание объявления PlayerAuctions";
   if (typeof instant === "boolean") attributes.auto = instant ? "1" : "0";
   return attributes;
