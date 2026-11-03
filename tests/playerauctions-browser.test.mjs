@@ -218,3 +218,44 @@ test("subsequent pages use the site's pagination button instead of typing a quer
     /неверный адрес/,
   );
 });
+
+test("blocked optional descriptions cannot delay or truncate the already complete catalog", async () => {
+  let reads = 0;
+  let catalogComplete = false;
+  const result = await collectPlayerauctionsPages({
+    parsePage,
+    loadPage: async () => html([100, 101, 102, 103, 104], 5, 1),
+    onCatalogComplete: async () => {
+      catalogComplete = true;
+    },
+    readDescription: async () => {
+      assert.equal(catalogComplete, true);
+      reads++;
+      throw new Error("Browser verification");
+    },
+  });
+  assert.equal(reads, 3);
+  assert.equal(result.offers.length, 5);
+  assert.equal(result.advertised, 5);
+  assert.equal(result.detailsFailed, 5);
+  assert.ok(result.offers.every((o) => o.attributes.ranked_access === "open"));
+});
+
+test("description time budget preserves collected prices, original URLs and explicit fields for every listing", async () => {
+  let time = 0;
+  const result = await collectPlayerauctionsPages({
+    parsePage,
+    loadPage: async () => html([100, 101, 102], 3, 1),
+    now: () => time,
+    maxDetailMs: 10,
+    readDescription: async () => {
+      time = 20;
+      return '<div id="offer-description-section">MMR: 5802<br>RANK: Immortal</div>';
+    },
+  });
+  assert.equal(result.offers.length, 3);
+  assert.equal(result.detailsFailed, 2);
+  assert.equal(result.offers[0].attributes.solommr, "5802");
+  assert.equal(result.offers[1].price, 12.5);
+  assert.match(result.offers[1].url, /101a!original-title/);
+});
