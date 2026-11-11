@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { playerauctionsAccountAttributes } from "./playerauctions-fields.mjs";
-import { upstreamError } from "./http.mjs";
+import { retrySnapshot, upstreamError } from "./http.mjs";
 
 export const playerauctionsCatalog =
   "https://www.playerauctions.com/dota-2-account/";
@@ -198,7 +198,7 @@ export async function collectPlayerauctionsPages({
 export async function readPlayerauctionsPage(
   page,
   url,
-  { followNext = false } = {},
+  { followNext = false, reload = false } = {},
 ) {
   let response;
   if (followNext) {
@@ -206,9 +206,11 @@ export async function readPlayerauctionsPage(
     // The dedicated next-page control keeps the correct destination.
     const link = page.locator('.pagination a[aria-label="Next Page"]').first();
     [response] = await Promise.all([
-      page.waitForNavigation({ waitUntil: "commit", timeout: 20000 }),
-      link.click({ timeout: 10000 }),
+      page.waitForNavigation({ waitUntil: "commit", timeout: 30000 }),
+      link.click({ timeout: 10000, noWaitAfter: true }),
     ]);
+  } else if (reload) {
+    response = await page.reload({ waitUntil: "commit", timeout: 30000 });
   } else {
     response = await page.goto(url, { waitUntil: "commit", timeout: 20000 });
   }
@@ -348,10 +350,33 @@ export async function fetchPlayerauctionsBrowser({
     const main = context.pages()[0] || (await context.newPage());
     let detailPage;
     return await collectPlayerauctionsPages({
-      loadPage: (url) =>
-        readPlayerauctionsPage(main, url, {
-          followNext: url !== playerauctionsCatalog,
-        }),
+      loadPage: async (url) => {
+        const expected = new URL(url);
+        const index = expected.searchParams.get("PageIndex") || "1";
+        let attempt = 0;
+        try {
+          return await retrySnapshot(() => {
+            const current = new URL(main.url());
+            const reload =
+              attempt++ > 0 &&
+              current.origin === expected.origin &&
+              current.pathname === expected.pathname &&
+              (current.searchParams.get("PageIndex") || "1") === index;
+            return readPlayerauctionsPage(main, url, {
+              followNext: !reload && url !== playerauctionsCatalog,
+              reload,
+            });
+          });
+        } catch (error) {
+          if (error.name !== "TimeoutError") throw error;
+          throw Object.assign(
+            new Error(
+              `PlayerAuctions: страница ${index} не загрузилась после повтора. Новый снимок не сохранён.`,
+            ),
+            { retryable: true },
+          );
+        }
+      },
       parsePage,
       onProgress,
       onCatalogComplete: async () => {
