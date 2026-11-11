@@ -1,5 +1,6 @@
 import { chromium } from "playwright-core";
 import { platforms } from "./platforms.mjs";
+import { upstreamError } from "./http.mjs";
 
 let browserPromise;
 let idleTimer;
@@ -57,6 +58,7 @@ export async function renderCategory(platformId) {
   if (!p) throw new Error("Неизвестная площадка");
   await acquire();
   let context;
+  let step = "открытие каталога";
   try {
     const instance = await browser();
     context = await instance.newContext({
@@ -70,27 +72,26 @@ export async function renderCategory(platformId) {
         : route.continue(),
     );
     const response = await page.goto(p.url, {
-      waitUntil: "domcontentloaded",
+      waitUntil: "commit",
       timeout: 25000,
     });
     if (response && response.status() >= 400)
-      throw new Error(
-        `${p.name}: браузер получил HTTP ${response.status()}. Доступ к каталогу ограничен.`,
-      );
-    const title = await page.title();
-    if (/captcha|just a moment|access denied|attention required/i.test(title))
-      throw new Error(
-        `${p.name}: требуется проверка доступа на стороне площадки. Автосбор не получил объявления.`,
-      );
+      throw upstreamError(p.name, response.status());
     // Wait for actual listing links rather than networkidle: marketplaces
     // commonly keep analytics connections open indefinitely.
+    step = "загрузка карточек";
     await page
       .locator(ready[platformId])
       .first()
-      .waitFor({ state: "attached", timeout: 15000 });
+      .waitFor({ state: "attached", timeout: 25000 });
+    step = "выбор валюты";
     if (
       platformId === "eldorado" &&
-      !/USD/.test(await page.locator(".locale-currency-button").innerText())
+      !/USD/.test(
+        await page
+          .locator(".locale-currency-button")
+          .innerText({ timeout: 10000 }),
+      )
     ) {
       await page.locator(".locale-currency-button").click();
       await page
@@ -113,10 +114,24 @@ export async function renderCategory(platformId) {
     }
     return await page.content();
   } catch (error) {
-    if (error.name === "TimeoutError")
-      throw new Error(
-        `${p.name}: каталог не загрузился за отведённое время. Новый снимок не сохранён.`,
+    if (error.name === "TimeoutError") {
+      const title = await context
+        ?.pages()[0]
+        ?.title()
+        .catch(() => "");
+      if (
+        /captcha|just a moment|access denied|attention required/i.test(
+          title ?? "",
+        )
+      )
+        throw new Error(`${p.name}: площадка запросила проверку браузера.`);
+      throw Object.assign(
+        new Error(
+          `${p.name}: истекло время ожидания (${step}). Новый снимок не сохранён.`,
+        ),
+        { retryable: true },
       );
+    }
     throw error;
   } finally {
     await context?.close().catch(() => {});

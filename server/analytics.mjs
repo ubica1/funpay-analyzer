@@ -207,14 +207,19 @@ export function sales(db, q, now = Date.now()) {
       new_mmr: r.new_mmr,
       sale_type: attributeText(r.attributes, "type1"),
     }));
+  const probable = rows.filter((r) => r.kind !== "sample_gone");
+  const sampleExits = rows.filter((r) => r.kind === "sample_gone");
   const summary = Object.fromEntries(
     saleWindows.map(([key, days]) => {
       const from = new Date(now - days * 86400000).toISOString();
-      const prices = rows.filter((r) => r.sold_at >= from).map((r) => r.price);
+      const prices = probable
+        .filter((r) => r.sold_at >= from)
+        .map((r) => r.price);
       return [
         key,
         {
           count: prices.length,
+          sampleCount: sampleExits.filter((r) => r.sold_at >= from).length,
           median: median(prices),
           total: Math.round(prices.reduce((a, b) => a + b, 0) * 100) / 100,
         },
@@ -234,7 +239,8 @@ export function sales(db, q, now = Date.now()) {
   return {
     summary,
     pending,
-    list: rows.slice(0, 2000),
+    list: probable.slice(0, 2000),
+    sampleExits: sampleExits.slice(0, 2000),
     snapshots: pairs.n,
     trackedSince: pairs.first,
   };

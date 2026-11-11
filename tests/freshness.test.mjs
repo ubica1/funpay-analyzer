@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { createDatabase, saveSnapshot } from "../server/db.mjs";
 import { analyze, querySchema } from "../server/analytics.mjs";
 import { createCollector } from "../server/collector.mjs";
-import { fetchListing, collectionError } from "../server/http.mjs";
+import {
+  fetchListing,
+  collectionError,
+  retrySnapshot,
+  upstreamError,
+} from "../server/http.mjs";
 const offer = {
   id: "1",
   title: "Account",
@@ -158,4 +163,32 @@ test("only transient connection errors retry once with the same deadline; TLS an
     ),
     /20 секунд/,
   );
+});
+
+test("a temporary upstream failure retries once but a refusal propagates immediately", async () => {
+  let calls = 0;
+  const wait = async () => {};
+  assert.equal(
+    await retrySnapshot(
+      async () => {
+        if (++calls === 1) throw upstreamError("Playerok", 503);
+        return "complete";
+      },
+      { wait },
+    ),
+    "complete",
+  );
+  assert.equal(calls, 2);
+  calls = 0;
+  await assert.rejects(
+    retrySnapshot(
+      async () => {
+        calls++;
+        throw upstreamError("Playerok", 403);
+      },
+      { wait },
+    ),
+    /403/,
+  );
+  assert.equal(calls, 1);
 });

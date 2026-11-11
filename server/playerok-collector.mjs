@@ -1,11 +1,14 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { fetchListing } from "./http.mjs";
+import { fetchListing, retrySnapshot, upstreamError } from "./http.mjs";
 import { externalAttributes } from "./external-fields.mjs";
 
 const gameId = "1ed59fc7-5a1e-6bd0-d573-07c8a022ecaa";
 const categoryId = "1ed5a056-002d-6c90-56ff-eaf27c161cdb";
 let nextRequestAt = 0;
 async function request(url, body) {
+  return retrySnapshot(() => readPage(url, body));
+}
+async function readPage(url, body) {
   // Share a modest rate across catalog and detail requests. Playerok rejects bursts.
   const at = Math.max(Date.now(), nextRequestAt);
   nextRequestAt = at + 150;
@@ -35,10 +38,10 @@ async function request(url, body) {
         continue;
       }
     }
-    if (!response.ok)
-      throw new Error(
-        `Playerok: HTTP ${response.status}. Новый снимок не сохранён.`,
-      );
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw upstreamError("Playerok", response.status);
+    }
     const data = await response.json();
     if (data.errors?.length)
       throw new Error(

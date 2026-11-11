@@ -150,7 +150,7 @@ export type Sale = {
   category: string;
   color: string;
   sold_at: string;
-  kind: "gone" | "replaced";
+  kind: "gone" | "replaced" | "catalog_gone" | "sample_gone";
   mmr: number | null;
   new_mmr: number | null;
   sale_type: string | null;
@@ -159,10 +159,11 @@ export type SaleWindow = "day" | "week" | "month";
 export type Sales = {
   summary: Record<
     SaleWindow,
-    { count: number; median: number | null; total: number }
+    { count: number; sampleCount: number; median: number | null; total: number }
   >;
   pending: number;
   list: Sale[];
+  sampleExits: Sale[];
   snapshots: number;
   trackedSince: string | null;
 };
