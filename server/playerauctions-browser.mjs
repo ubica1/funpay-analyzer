@@ -105,7 +105,8 @@ export async function collectPlayerauctionsPages({
   const offers = new Map(),
     visited = new Set();
   let url = playerauctionsCatalog,
-    expected = null;
+    expected = null,
+    catalogChanged = false;
   while (url) {
     if (visited.has(url) || visited.size >= maxPages)
       throw new Error(
@@ -114,14 +115,8 @@ export async function collectPlayerauctionsPages({
     visited.add(url);
     const html = await loadPage(url),
       info = playerauctionsPageInfo(html, url);
-    if (expected == null) expected = info.total;
-    if (expected !== info.total)
-      throw Object.assign(
-        new Error(
-          "PlayerAuctions: каталог изменился во время обхода. Полный снимок нужно собрать повторно.",
-        ),
-        { retryable: true },
-      );
+    if (expected != null && expected !== info.total) catalogChanged = true;
+    expected = info.total;
     if (expected === 0)
       throw new Error(
         "PlayerAuctions: каталог пуст. Предыдущий снимок сохранён.",
@@ -141,9 +136,19 @@ export async function collectPlayerauctionsPages({
     });
     url = info.next;
   }
+  if (catalogChanged && offers.size <= expected) {
+    const firstPage = await loadPage(playerauctionsCatalog);
+    const latest = playerauctionsPageInfo(firstPage, playerauctionsCatalog);
+    expected = latest.total;
+    for (const offer of parsePage(firstPage).offers)
+      offers.set(offer.id, offer);
+  }
   if (offers.size !== expected)
-    throw new Error(
-      `PlayerAuctions: собрано ${offers.size} из ${expected}. Неполный снимок не сохранён.`,
+    throw Object.assign(
+      new Error(
+        `PlayerAuctions: ${catalogChanged ? "каталог изменился. " : ""}собрано ${offers.size} из ${expected}. Неполный снимок не сохранён.`,
+      ),
+      { retryable: true },
     );
   await onCatalogComplete();
   let detailsFailed = 0;
@@ -190,6 +195,7 @@ export async function collectPlayerauctionsPages({
   return {
     offers: [...offers.values()],
     advertised: expected,
+    catalogChanged,
     skipped: 0,
     pages: visited.size,
     detailsFailed,
