@@ -6,6 +6,7 @@ import {
   querySchema,
   exportRows,
   sellerDetail,
+  sales,
 } from "../server/analytics.mjs";
 import { parseExternalOffers } from "../server/external-collector.mjs";
 import { platforms } from "../server/platforms.mjs";
@@ -235,5 +236,57 @@ test("existing FunPay database is migrated without dropping categories, snapshot
   } finally {
     db.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("external sale evidence requires two misses, distinguishes sample exits and is withdrawn on return", () => {
+  const db = createDatabase();
+  try {
+    const at = (day) => `2026-10-${day}T10:00:00.000Z`;
+    const now = Date.parse(at(24));
+    for (const [platform, full] of [
+      ["playerauctions", true],
+      ["ggsel", false],
+    ]) {
+      const category = `${platform}-accounts`;
+      const a = { ...lot(platform, 10), id: `${platform}:a`, title: "A" };
+      const b = { ...lot(platform, 20), id: `${platform}:b`, title: "B" };
+      const first = full
+        ? [a, b]
+        : [
+            a,
+            b,
+            ...Array.from({ length: 3 }, (_, i) => ({
+              ...b,
+              id: `${platform}:extra${i}`,
+            })),
+          ];
+      const rest = first.slice(1);
+      const save = (offers, day) =>
+        saveSnapshot(
+          db,
+          category,
+          offers,
+          full ? { advertised: offers.length } : {},
+          at(day),
+        );
+      save(first, 20);
+      save(rest, 21);
+      assert.equal(sales(db, query({ market: platform }), now).list.length, 0);
+      save(rest, 22);
+      const result = sales(db, query({ market: platform }), now);
+      assert.equal(result.list.length, full ? 1 : 0);
+      assert.equal(result.sampleExits.length, full ? 0 : 1);
+      assert.equal(result.summary.month.total, full ? 10 : 0);
+      assert.equal(
+        (result.list[0] ?? result.sampleExits[0]).platform,
+        platform,
+      );
+      save(first, 23);
+      const returned = sales(db, query({ market: platform }), now);
+      assert.equal(returned.list.length + returned.sampleExits.length, 0);
+    }
+  } finally {
+    db.close();
   }
 });

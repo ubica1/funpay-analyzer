@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { playerauctionsAccountAttributes } from "./playerauctions-fields.mjs";
+import { upstreamError } from "./http.mjs";
 
 export const playerauctionsCatalog =
   "https://www.playerauctions.com/dota-2-account/";
@@ -115,8 +116,11 @@ export async function collectPlayerauctionsPages({
       info = playerauctionsPageInfo(html, url);
     if (expected == null) expected = info.total;
     if (expected !== info.total)
-      throw new Error(
-        "PlayerAuctions: каталог изменился во время обхода. Полный снимок нужно собрать повторно.",
+      throw Object.assign(
+        new Error(
+          "PlayerAuctions: каталог изменился во время обхода. Полный снимок нужно собрать повторно.",
+        ),
+        { retryable: true },
       );
     if (expected === 0)
       throw new Error(
@@ -210,23 +214,30 @@ export async function readPlayerauctionsPage(
   }
   if (!response) throw new Error("PlayerAuctions: браузер не получил ответ.");
   if (response.status() >= 400 && ![403, 429].includes(response.status()))
-    throw new Error(`PlayerAuctions: HTTP ${response.status()}.`);
+    throw upstreamError("PlayerAuctions", response.status());
   const catalog = new URL(url).pathname === "/dota-2-account/";
   try {
     // The server response has cards but no pagination. The site's own scripts
     // create page links and description content after parsing the document.
-    await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
+    if (!catalog)
+      await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
     await page
       .locator(catalog ? ".offer-item" : "#offer-description-section")
       .first()
       .waitFor({ state: "attached", timeout: 30000 });
   } catch {
-    if (response.status() >= 400)
+    if (
+      response.status() >= 400 ||
+      /captcha|just a moment|access denied/i.test(await page.title())
+    )
       throw new Error(
         "PlayerAuctions: требуется ручная проверка браузера. Полный снимок не сохранён.",
       );
-    throw new Error(
-      "PlayerAuctions: страница не загрузилась полностью. Новый снимок не сохранён.",
+    throw Object.assign(
+      new Error(
+        "PlayerAuctions: страница не загрузилась полностью. Новый снимок не сохранён.",
+      ),
+      { retryable: true },
     );
   }
   if (catalog) {

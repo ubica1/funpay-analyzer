@@ -222,8 +222,7 @@ function App() {
       () =>
         loadBoot()
           .then((b) => {
-            if (b.collector.running || lastRun.current !== b.runs[0]?.id)
-              setRefresh((n) => n + 1);
+            if (lastRun.current !== b.runs[0]?.id) setRefresh((n) => n + 1);
             lastRun.current = b.runs[0]?.id;
           })
           .catch(() => {}),
@@ -681,8 +680,7 @@ function App() {
               <Info size={16} />
               <span>
                 Обзор собранных объявлений. Недоступные площадки и категории без
-                снимков не включаются в расчёты. Продажи отслеживаются только на
-                FunPay.
+                снимков не включаются в расчёты.
               </span>
             </div>
           )}
@@ -2361,7 +2359,7 @@ function SellerProfile({
             <h2>
               Продажи <span className="count-badge">{detail.sales.length}</span>
             </h2>
-            <p>Подтверждённые продажи за 30 дней</p>
+            <p>Вероятные продажи за 30 дней</p>
           </div>
         </div>
         <div className="table-scroll">
@@ -2446,7 +2444,13 @@ function SalesPanel({ sales, currency }: { sales: Sales; currency: string }) {
   const [page, setPage] = useState(1);
   const days = { day: 1, week: 7, month: 30 }[period];
   const from = new Date(Date.now() - days * 86400000).toISOString();
-  const rows = sales.list.filter((s) => s.sold_at >= from);
+  const [showSample, setShowSample] = useState<boolean | null>(null);
+  const showingSample =
+    (showSample ?? sales.summary[period].count === 0) &&
+    sales.summary.month.sampleCount > 0;
+  const rows = (showingSample ? sales.sampleExits : sales.list).filter(
+    (s) => s.sold_at >= from,
+  );
   const pages = Math.max(1, Math.ceil(rows.length / 25));
   // Until history covers the whole window, say how long was actually observed.
   const observed = (key: SaleWindow) => {
@@ -2465,10 +2469,10 @@ function SalesPanel({ sales, currency }: { sales: Sales; currency: string }) {
         {saleWindows.map(([key, label]) => (
           <Stat
             key={key}
-            label={`Продажи за ${{ day: "сутки", week: "неделю", month: "месяц" }[key]}`}
+            label={`Вероятные продажи за ${{ day: "сутки", week: "неделю", month: "месяц" }[key]}`}
             value={number(sales.summary[key].count)}
             Icon={ShoppingCart}
-            note={`Медиана ${money(sales.summary[key].median)} · сумма ${money(sales.summary[key].total)}${observed(key)}`}
+            note={`Медиана ${money(sales.summary[key].median)} · сумма цен ${money(sales.summary[key].total)}${observed(key)}`}
             wide
           />
         ))}
@@ -2477,13 +2481,13 @@ function SalesPanel({ sales, currency }: { sales: Sales; currency: string }) {
         <div className="panel-heading">
           <div>
             <h2>
-              Вероятные продажи{" "}
+              {showingSample ? "Выбытия из выборки" : "Вероятные продажи"}{" "}
               <span className="count-badge">{number(rows.length)}</span>
             </h2>
             <p>
-              Лот пропал из выдачи, и его страница на FunPay удалена, или в лоте
-              сменился аккаунт (другой MMR). Снятые продавцом лоты отличить от
-              проданных нельзя.
+              {showingSample
+                ? "Лот отсутствует в двух последовательных выборках. Причина выбытия неизвестна."
+                : "FunPay учитывает удалённые лоты и замену аккаунта. На других площадках признак вероятной продажи — отсутствие лота в двух полных снимках подряд. Лот мог быть снят продавцом."}
               {sales.pending > 0 &&
                 ` Ещё проверяется лотов: ${number(sales.pending)}.`}
               {sales.trackedSince &&
@@ -2505,6 +2509,28 @@ function SalesPanel({ sales, currency }: { sales: Sales; currency: string }) {
             ))}
           </div>
         </div>
+        {sales.summary.month.sampleCount > 0 && (
+          <div className="segmented">
+            <button
+              className={!showingSample ? "selected" : ""}
+              onClick={() => {
+                setShowSample(false);
+                setPage(1);
+              }}
+            >
+              Вероятные продажи
+            </button>
+            <button
+              className={showingSample ? "selected" : ""}
+              onClick={() => {
+                setShowSample(true);
+                setPage(1);
+              }}
+            >
+              Выбытия из выборки · {number(sales.summary[period].sampleCount)}
+            </button>
+          </div>
+        )}
         {sales.snapshots < 2 ? (
           <div className="empty-state">
             <h2>Нужно хотя бы два снимка</h2>
@@ -2512,6 +2538,10 @@ function SalesPanel({ sales, currency }: { sales: Sales; currency: string }) {
               Продажи определяются сравнением соседних снимков. Включите
               расписание в «Сборе данных» или соберите данные ещё раз позже.
             </p>
+          </div>
+        ) : !rows.length ? (
+          <div className="empty-state">
+            <p>За выбранный период нет записей с этими фильтрами.</p>
           </div>
         ) : (
           <>
@@ -2548,18 +2578,26 @@ function SalesPanel({ sales, currency }: { sales: Sales; currency: string }) {
                       <td>{s.mmr == null ? "—" : number(s.mmr)}</td>
                       <td className="price-cell">{money(s.price)}</td>
                       <td>
-                        <a
-                          href={`https://funpay.com/users/${s.seller_id}/`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {s.seller}
-                        </a>
+                        {s.platform === "funpay" ? (
+                          <a
+                            href={`https://funpay.com/users/${s.seller_id}/`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {s.seller}
+                          </a>
+                        ) : (
+                          s.seller
+                        )}
                       </td>
                       <td>
                         {s.kind === "gone"
                           ? "Лот снят"
-                          : `Аккаунт заменён (MMR ${number(s.new_mmr)})`}
+                          : s.kind === "replaced"
+                            ? `Аккаунт заменён (MMR ${number(s.new_mmr)})`
+                            : s.kind === "catalog_gone"
+                              ? "Исчез из полного каталога"
+                              : "Исчез из выборки"}
                       </td>
                     </tr>
                   ))}

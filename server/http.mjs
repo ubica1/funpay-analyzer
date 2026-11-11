@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 const transient = new Set([
   "ENOTFOUND",
   "EAI_AGAIN",
@@ -19,6 +21,31 @@ function codes(error) {
       ].filter(Boolean),
     ),
   ];
+}
+export function upstreamError(source, status) {
+  return Object.assign(
+    new Error(`${source}: HTTP ${status}. Новый снимок не сохранён.`),
+    {
+      retryable: [408, 500, 502, 503, 504].includes(status),
+    },
+  );
+}
+export async function retrySnapshot(read, { wait = delay } = {}) {
+  try {
+    return await read();
+  } catch (error) {
+    if (
+      !error.retryable &&
+      !["TimeoutError", "AbortError"].includes(error.name) &&
+      !codes(error).some((code) => transient.has(code)) &&
+      !/net::ERR_(CONNECTION_RESET|CONNECTION_CLOSED|TIMED_OUT|NETWORK_CHANGED)/.test(
+        error.message,
+      )
+    )
+      throw error;
+    await wait(1000);
+    return read();
+  }
 }
 export function collectionError(error) {
   if (error?.name === "TimeoutError" || error?.name === "AbortError")

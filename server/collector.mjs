@@ -1,4 +1,9 @@
-import { fetchListing, collectionError } from "./http.mjs";
+import {
+  fetchListing,
+  collectionError,
+  retrySnapshot,
+  upstreamError,
+} from "./http.mjs";
 import { selectedCategoryIds, platforms } from "./platforms.mjs";
 import { fetchExternalCategory } from "./external-collector.mjs";
 import { load } from "cheerio";
@@ -100,6 +105,9 @@ export function parseOffers(html, pageUrl) {
   return { offers: unique, advertised: count ? Number(count) : null, skipped };
 }
 export async function fetchCategory(url) {
+  return retrySnapshot(() => readCategory(url));
+}
+async function readCategory(url) {
   const response = await fetchListing(categoryUrl(url), {
     redirect: "error",
     headers: {
@@ -109,10 +117,10 @@ export async function fetchCategory(url) {
       Cookie: "cy=rub",
     },
   });
-  if (!response.ok)
-    throw new Error(
-      `FunPay HTTP ${response.status}. Следующая попытка по расписанию.`,
-    );
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw upstreamError("FunPay", response.status);
+  }
   const reader = response.body.getReader();
   const chunks = [];
   let size = 0;

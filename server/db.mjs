@@ -104,7 +104,7 @@ export function createDatabase(path = ":memory:") {
   const stale = version?.value !== String(salesVersion);
   if (stale)
     db.exec(
-      "DROP TABLE IF EXISTS sales; DELETE FROM settings WHERE key='salesBackfilled';",
+      "DROP TABLE IF EXISTS sales; DELETE FROM settings WHERE key IN ('salesBackfilled','externalSalesBackfilled');",
     );
   db.exec(salesTable);
   if (stale) {
@@ -120,6 +120,27 @@ export function createDatabase(path = ":memory:") {
     );
   }
   backfillExternalFields(db);
+  if (
+    !db
+      .prepare("SELECT 1 FROM settings WHERE key='externalSalesBackfilled'")
+      .get()
+  ) {
+    db.exec("BEGIN");
+    try {
+      const external = db
+        .prepare(
+          "SELECT s.id,s.category_id,s.collected_at,s.total,s.advertised FROM snapshots s JOIN categories c ON c.id=s.category_id WHERE c.platform<>'funpay' ORDER BY s.collected_at,s.id",
+        )
+        .all();
+      for (const snapshot of external) recordExternalSales(db, snapshot);
+      db.exec(
+        "INSERT INTO settings VALUES('externalSalesBackfilled','true'); COMMIT",
+      );
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   return db;
 }
 export function settings(db) {
@@ -173,7 +194,19 @@ export function saveSnapshot(
         JSON.stringify(o.attributes),
         o.url,
       );
-    recordSales(db, categoryId, id, at);
+    if (
+      db.prepare("SELECT platform FROM categories WHERE id=?").get(categoryId)
+        .platform === "funpay"
+    )
+      recordSales(db, categoryId, id, at);
+    else
+      recordExternalSales(db, {
+        id,
+        category_id: categoryId,
+        collected_at: at,
+        total: unique.length,
+        advertised: meta.advertised,
+      });
     db.exec("COMMIT");
     return id;
   } catch (e) {
@@ -185,7 +218,54 @@ const salesVersion = 4;
 // verified: NULL while the lot page is not checked yet, 1 once FunPay reports
 // the lot as removed. Lots found alive are deleted from the table.
 const salesTable = `CREATE TABLE IF NOT EXISTS sales(snapshot_id INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE, offer_id TEXT NOT NULL, title TEXT NOT NULL, price REAL NOT NULL, seller_id TEXT NOT NULL, seller TEXT NOT NULL, reviews INTEGER NOT NULL, online INTEGER NOT NULL, attributes TEXT NOT NULL, url TEXT NOT NULL, kind TEXT NOT NULL, new_mmr REAL, verified INTEGER, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(snapshot_id,offer_id));
-  CREATE INDEX IF NOT EXISTS sales_pending ON sales(verified);`;
+  CREATE INDEX IF NOT EXISTS sales_pending ON sales(verified);
+  CREATE INDEX IF NOT EXISTS sales_external_offer ON sales(offer_id) WHERE kind IN ('catalog_gone','sample_gone');`;
+
+function recordExternalSales(db, current) {
+  const { id, category_id: category, collected_at: at } = current;
+  // A returned listing invalidates the earlier inference.
+  db.prepare(
+    `DELETE FROM sales WHERE kind IN ('catalog_gone','sample_gone')
+    AND offer_id IN (SELECT offer_id FROM observations WHERE snapshot_id=?)`,
+  ).run(id);
+  const [firstMiss, baseline] = db
+    .prepare(
+      `SELECT id,total,advertised FROM snapshots WHERE category_id=?
+      AND (collected_at,id)<(?,?) ORDER BY collected_at DESC,id DESC LIMIT 2`,
+    )
+    .all(category, at, id);
+  if (!baseline) return;
+  const complete = [baseline, firstMiss, current].every(
+    (s) => s.total === s.advertised,
+  );
+  // A sharp reduction in an unverified sample is evidence of a changed
+  // collection scope. Stable samples only support an exit from that sample.
+  if (
+    !complete &&
+    Math.min(firstMiss.total, current.total) < baseline.total * 0.8
+  )
+    return;
+  db.prepare(
+    `INSERT OR IGNORE INTO sales
+    SELECT ?,o.offer_id,o.title,o.price,o.seller_id,o.seller,o.reviews,o.online,o.attributes,o.url,?,NULL,1,0
+    FROM observations o WHERE o.snapshot_id=?
+      AND COALESCE(attribute_text(o.attributes,'type1'),'продажа')='продажа'
+      AND NOT EXISTS(SELECT 1 FROM observations x
+        WHERE x.snapshot_id IN (?,?) AND x.offer_id=o.offer_id)
+      AND NOT EXISTS(SELECT 1 FROM observations x
+        WHERE x.snapshot_id IN (?,?) AND x.seller_id=o.seller_id
+          AND x.title=o.title AND x.price=o.price
+          AND NOT EXISTS(SELECT 1 FROM observations y WHERE y.snapshot_id=o.snapshot_id AND y.offer_id=x.offer_id))`,
+  ).run(
+    id,
+    complete ? "catalog_gone" : "sample_gone",
+    baseline.id,
+    firstMiss.id,
+    id,
+    firstMiss.id,
+    id,
+  );
+}
 // A sale lot is a sale candidate when it vanishes between two consecutive
 // snapshots of its category, unless its seller re-posted it under a new id
 // with the same title and price. FunPay lists only part of a category and the

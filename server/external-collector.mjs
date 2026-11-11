@@ -2,8 +2,11 @@ import { playerauctionsAccountAttributes } from "./playerauctions-fields.mjs";
 import { fetchPlayerauctionsBrowser } from "./playerauctions-browser.mjs";
 import { fetchPlayerokCategory } from "./playerok-collector.mjs";
 import { g2gRankProperties } from "./g2g-fields.mjs";
-import { renderCategory } from "./browser-collector.mjs";
-import { fetchListing } from "./http.mjs";
+import {
+  renderCategory,
+  closeCollectionBrowser,
+} from "./browser-collector.mjs";
+import { fetchListing, retrySnapshot, upstreamError } from "./http.mjs";
 import { externalAttributes } from "./external-fields.mjs";
 import { load } from "cheerio";
 import { platforms } from "./platforms.mjs";
@@ -313,8 +316,10 @@ async function fetchExternalHtml(category) {
         p.region === "ru" ? "ru-RU,ru;q=0.9" : "en-US,en;q=0.9",
     },
   });
-  if (!response.ok)
-    throw new Error(`${p.name}: HTTP ${response.status}. Снимок не сохранён.`);
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw upstreamError(p.name, response.status);
+  }
   const reader = response.body.getReader(),
     chunks = [];
   let size = 0;
@@ -331,11 +336,24 @@ async function fetchExternalHtml(category) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+let browserQueue = Promise.resolve();
+function withBrowser(read) {
+  const result = browserQueue.then(read);
+  browserQueue = result.catch(() => {});
+  return result;
+}
+async function renderSnapshot(id) {
+  try {
+    return await renderCategory(id);
+  } finally {
+    await closeCollectionBrowser();
+  }
+}
 export async function fetchExternalCategory(
   category,
   {
     loadHtml = fetchExternalHtml,
-    render = renderCategory,
+    render = renderSnapshot,
     playerok = fetchPlayerokCategory,
     onProgress,
     playerauctions = fetchPlayerauctionsBrowser,
@@ -346,16 +364,27 @@ export async function fetchExternalCategory(
     throw new Error("Неизвестный адрес каталога");
   if (p.id === "playerok") return playerok({ onProgress });
   if (p.id === "playerauctions")
-    return playerauctions({
-      onProgress,
-      parsePage: (html) => parseExternalOffers(html, "playerauctions"),
-    });
-  if (p.browser) return parseExternalOffers(await render(p.id), p.id);
+    return withBrowser(() =>
+      retrySnapshot(() =>
+        playerauctions({
+          onProgress,
+          parsePage: (html) => parseExternalOffers(html, "playerauctions"),
+        }),
+      ),
+    );
+  const fromBrowser = () =>
+    withBrowser(() =>
+      retrySnapshot(async () => parseExternalOffers(await render(p.id), p.id)),
+    );
+  if (p.browser) return fromBrowser();
   try {
-    return parseExternalOffers(await loadHtml(category), p.id);
+    return parseExternalOffers(
+      await retrySnapshot(() => loadHtml(category)),
+      p.id,
+    );
   } catch (error) {
     try {
-      return parseExternalOffers(await render(p.id), p.id);
+      return fromBrowser();
     } catch (browserError) {
       throw new Error(
         `${p.name}: автосбор не получил данные. ${browserError.message} Первый запрос: ${error.message}`,
