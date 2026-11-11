@@ -303,9 +303,25 @@ export function createCollector(
                         if (index >= 0) progress.current[index] = currentName;
                       },
                     });
-              saveSnapshot(db, c.id, result.offers, result);
-              const message = result.detailsFailed
-                ? `Все объявления сохранены; параметры ${result.detailsFailed} лотов не уточнены по описаниям. Неизвестные значения исключаются фильтрами`
+              // A moving catalog can be reconciled against its count, but must
+              // not be treated as stable coverage when inferring sales.
+              saveSnapshot(
+                db,
+                c.id,
+                result.offers,
+                result.catalogChanged
+                  ? { ...result, advertised: null }
+                  : result,
+              );
+              const warning = [
+                result.catalogChanged && "каталог менялся во время обхода",
+                result.detailsFailed &&
+                  `параметры ${result.detailsFailed} лотов не уточнены по описаниям`,
+              ]
+                .filter(Boolean)
+                .join(". ");
+              const message = warning
+                ? `Снимок сохранён. ${warning}`
                 : result.advertised > result.offers.length
                   ? "Снимок сохранён; выборка неполная"
                   : "Снимок сохранён";
@@ -314,11 +330,11 @@ export function createCollector(
                 name: c.name,
                 status: "success",
                 count: result.offers.length,
-                ...(result.detailsFailed ? { message } : {}),
+                ...(warning ? { message } : {}),
               });
               log(
                 c.id,
-                result.detailsFailed ? "warning" : "success",
+                warning ? "warning" : "success",
                 message,
                 result.offers.length,
               );

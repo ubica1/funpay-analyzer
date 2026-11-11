@@ -276,3 +276,23 @@ test("Calibrated listings are recognized from the catalog even when their descri
   assert.equal(result.offers[0].attributes.solommr, "1970");
   assert.equal(result.offers[1].attributes.ranked_access, "unknown");
 });
+
+test("a changing catalog rechecks its first page and requires the latest unique count", async () => {
+  let reads = 0;
+  const result = await collectPlayerauctionsPages({
+    parsePage,
+    loadPage: async (url) => {
+      reads++;
+      if (reads === 2) return html([102], 4, 2);
+      assert.equal(url, playerauctionsCatalog);
+      return reads === 1 ? html([100, 101], 3, 2) : html([103, 100], 4, 2);
+    },
+  });
+  assert.equal(reads, 3);
+  assert.equal(result.catalogChanged, true);
+  assert.equal(result.advertised, 4);
+  assert.deepEqual(
+    result.offers.map((offer) => offer.id),
+    [100, 101, 102, 103].map((id) => `playerauctions:${id}`),
+  );
+});
