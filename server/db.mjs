@@ -219,6 +219,8 @@ const salesVersion = 4;
 // the lot as removed. Lots found alive are deleted from the table.
 const salesTable = `CREATE TABLE IF NOT EXISTS sales(snapshot_id INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE, offer_id TEXT NOT NULL, title TEXT NOT NULL, price REAL NOT NULL, seller_id TEXT NOT NULL, seller TEXT NOT NULL, reviews INTEGER NOT NULL, online INTEGER NOT NULL, attributes TEXT NOT NULL, url TEXT NOT NULL, kind TEXT NOT NULL, new_mmr REAL, verified INTEGER, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(snapshot_id,offer_id));
   CREATE INDEX IF NOT EXISTS sales_pending ON sales(verified);
+  CREATE INDEX IF NOT EXISTS sales_pending_offer ON sales(offer_id) WHERE verified IS NULL;
+  CREATE INDEX IF NOT EXISTS sales_pending_recent ON sales(snapshot_id DESC,offer_id) WHERE verified IS NULL AND attempts<3;
   CREATE INDEX IF NOT EXISTS sales_external_offer ON sales(offer_id) WHERE kind IN ('catalog_gone','sample_gone');`;
 
 function recordExternalSales(db, current) {

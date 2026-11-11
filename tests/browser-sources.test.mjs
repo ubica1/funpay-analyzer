@@ -65,3 +65,43 @@ test("browser marketplaces collect automatically; static sources fall back to br
   assert.equal(fallback.offers[0].url, g2g.url + "/offer/G123");
   assert.ok(platforms.every((p) => p.automatic !== false));
 });
+
+test("Eldorado uses the public catalog with the same offer IDs as the browser and reports its sample size", async () => {
+  const platform = platforms.find((p) => p.id === "eldorado");
+  const offer = {
+    id: "cd36482c-e36c-49e1-ba9d-08deb02df1c2",
+    gameId: "43",
+    category: "Account",
+    offerTitle: "Rank Ready | 10000 Behavior",
+    attributes: [{ id: "dota-2-rank", value: { name: "Uncalibrated" } }],
+    guaranteedDeliveryTime: "Instant",
+    pricePerUnit: { amount: 411.45, currency: "TRY" },
+    pricePerUnitInUSD: { amount: 8, currency: "USD" },
+  };
+  const result = await fetchExternalCategory(
+    { platform: platform.id, url: platform.url },
+    {
+      eldorado: async () => ({
+        pageIndex: 1,
+        recordCount: 5516,
+        results: [
+          {
+            offer,
+            user: { username: "CharlesDoal" },
+            userOrderInfo: { ratingCount: 1857 },
+          },
+        ],
+      }),
+      render: async () => assert.fail("The browser is only a fallback"),
+    },
+  );
+  const [lot] = result.offers;
+  assert.equal(result.advertised, 5516);
+  assert.equal(
+    lot.id,
+    parseExternalOffers(fixture("eldorado"), "eldorado").offers[0].id,
+  );
+  assert.equal(lot.price, 8);
+  assert.equal(lot.attributes.currency, "USD");
+  assert.equal(lot.attributes.ranked_access, "open");
+});

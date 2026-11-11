@@ -336,10 +336,10 @@ async function fetchExternalHtml(category) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-let browserQueue = Promise.resolve();
-function withBrowser(read) {
-  const result = browserQueue.then(read);
-  browserQueue = result.catch(() => {});
+let collectionQueue = Promise.resolve();
+export function withLargeCollection(read) {
+  const result = collectionQueue.then(read);
+  collectionQueue = result.catch(() => {});
   return result;
 }
 async function renderSnapshot(id) {
@@ -349,6 +349,72 @@ async function renderSnapshot(id) {
     await closeCollectionBrowser();
   }
 }
+async function fetchEldoradoPage() {
+  const response = await fetchListing(
+    "https://www.eldorado.gg/api/flexibleOffers?gameId=43&category=Account&pageSize=24&pageIndex=1",
+    { headers: { Accept: "application/json" }, redirect: "error" },
+  );
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw upstreamError("Eldorado.gg", response.status);
+  }
+  return response.json();
+}
+
+export function parseEldoradoPage({ results, recordCount, pageIndex }) {
+  if (
+    pageIndex !== 1 ||
+    !Array.isArray(results) ||
+    !results.length ||
+    !Number.isSafeInteger(recordCount) ||
+    recordCount < results.length
+  )
+    throw new Error("Eldorado.gg: неожиданный формат публичного каталога.");
+  const offers = results.map(({ offer, user, userOrderInfo }) => {
+    const price =
+      offer?.pricePerUnitWithDiscount?.currency === "USD"
+        ? offer.pricePerUnitWithDiscount
+        : offer?.pricePerUnitInUSD;
+    if (
+      offer?.gameId !== "43" ||
+      offer.category !== "Account" ||
+      typeof offer.offerTitle !== "string" ||
+      !offer.offerTitle.trim() ||
+      typeof offer.id !== "string" ||
+      !/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(offer.id) ||
+      price?.currency !== "USD" ||
+      !Number.isFinite(price.amount) ||
+      price.amount < 0
+    )
+      throw new Error("Eldorado.gg: некорректные данные карточки.");
+    const rank = offer.attributes?.find((a) => a.id === "dota-2-rank")?.value
+      ?.name;
+    const title =
+      typeof rank === "string" && rank
+        ? `${rank} · ${offer.offerTitle}`
+        : offer.offerTitle;
+    const seller = user?.username || "Продавец не указан";
+    const path = `/dota-accounts/oa/${offer.id}`;
+    return {
+      id: `eldorado:${path}`,
+      title,
+      price: Math.round(price.amount * 100) / 100,
+      seller,
+      sellerId: `eldorado:${user?.username || "unknown"}`,
+      reviews: Number(userOrderInfo?.ratingCount) || 0,
+      online: false,
+      attributes: {
+        type1: "продажа",
+        ...externalAttributes(title),
+        ...(offer.guaranteedDeliveryTime === "Instant" ? { auto: "1" } : {}),
+        platform: "eldorado",
+        currency: "USD",
+      },
+      url: `https://www.eldorado.gg${path}`,
+    };
+  });
+  return { offers, advertised: recordCount, skipped: 0 };
+}
 export async function fetchExternalCategory(
   category,
   {
@@ -357,6 +423,7 @@ export async function fetchExternalCategory(
     playerok = fetchPlayerokCategory,
     onProgress,
     playerauctions = fetchPlayerauctionsBrowser,
+    eldorado = fetchEldoradoPage,
   } = {},
 ) {
   const p = platforms.find((p) => p.id === category.platform);
@@ -364,7 +431,7 @@ export async function fetchExternalCategory(
     throw new Error("Неизвестный адрес каталога");
   if (p.id === "playerok") return playerok({ onProgress });
   if (p.id === "playerauctions")
-    return withBrowser(() =>
+    return withLargeCollection(() =>
       retrySnapshot(() =>
         playerauctions({
           onProgress,
@@ -373,11 +440,12 @@ export async function fetchExternalCategory(
       ),
     );
   const fromBrowser = () =>
-    withBrowser(() =>
+    withLargeCollection(() =>
       retrySnapshot(async () => parseExternalOffers(await render(p.id), p.id)),
     );
-  if (p.browser) return fromBrowser();
   try {
+    if (p.id === "eldorado")
+      return parseEldoradoPage(await retrySnapshot(eldorado));
     return parseExternalOffers(
       await retrySnapshot(() => loadHtml(category)),
       p.id,
