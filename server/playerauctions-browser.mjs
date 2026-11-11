@@ -288,9 +288,12 @@ async function virtualDisplay() {
       timer = setTimeout(
         () =>
           reject(
-            new Error("Не удалось запустить экран браузера PlayerAuctions."),
+            Object.assign(
+              new Error("Не удалось запустить экран браузера PlayerAuctions."),
+              { retryable: true },
+            ),
           ),
-        5000,
+        15000,
       );
       child.once("error", reject);
       child.once("exit", () =>

@@ -233,9 +233,9 @@ export function sales(db, q, now = Date.now()) {
     .get(...ids, since);
   const pending = db
     .prepare(
-      `SELECT COUNT(*) n FROM sales sa JOIN snapshots s ON s.id=sa.snapshot_id WHERE sa.verified IS NULL AND sa.attempts<3 AND s.category_id IN (${marks})`,
+      `SELECT COUNT(*) n FROM snapshots s CROSS JOIN sales sa ON sa.snapshot_id=s.id WHERE sa.verified IS NULL AND sa.attempts<3 AND s.category_id IN (${marks}) AND s.collected_at>=?`,
     )
-    .get(...ids).n;
+    .get(...ids, since).n;
   return {
     summary,
     pending,

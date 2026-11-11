@@ -29,7 +29,6 @@ export const platforms = [
   },
   {
     id: "eldorado",
-    browser: true,
     name: "Eldorado.gg",
     region: "foreign",
     currency: "USD",

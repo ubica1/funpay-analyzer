@@ -5,7 +5,10 @@ import {
   upstreamError,
 } from "./http.mjs";
 import { selectedCategoryIds, platforms } from "./platforms.mjs";
-import { fetchExternalCategory } from "./external-collector.mjs";
+import {
+  fetchExternalCategory,
+  withLargeCollection,
+} from "./external-collector.mjs";
 import { load } from "cheerio";
 import { saveSnapshot, settings } from "./db.mjs";
 export function categoryUrl(value) {
@@ -24,7 +27,7 @@ export function categoryUrl(value) {
   return `https://funpay.com/lots/${url.pathname.split("/").filter(Boolean).at(-1)}/`;
 }
 export function parseOffers(html, pageUrl) {
-  const $ = load(html);
+  const $ = load(html, { xml: { xmlMode: false } });
   const offers = [];
   let skipped = 0;
   if (/captcha|access denied|just a moment/i.test($("title").text()))
@@ -105,7 +108,7 @@ export function parseOffers(html, pageUrl) {
   return { offers: unique, advertised: count ? Number(count) : null, skipped };
 }
 export async function fetchCategory(url) {
-  return retrySnapshot(() => readCategory(url));
+  return withLargeCollection(() => retrySnapshot(() => readCategory(url)));
 }
 async function readCategory(url) {
   const response = await fetchListing(categoryUrl(url), {
